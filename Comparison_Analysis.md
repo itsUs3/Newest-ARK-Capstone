@@ -7,6 +7,10 @@ This report analyzes why the current Real Estate AI Platform is architecturally 
 
 The analysis is grounded in this codebase implementation, especially:
 - backend/main.py
+- backend/app/core/providers.py
+- backend/app/services/price_service.py
+- backend/app/api/routes/price.py
+- backend/app/api/routes/health.py
 - backend/models/smart_property_map_search.py
 - backend/models/recommendation_engine.py
 - backend/models/price_predictor.py
@@ -16,6 +20,8 @@ The analysis is grounded in this codebase implementation, especially:
 - backend/models/social/social_intelligence.py
 - backend/data_pipeline/reddit_ingestion.py
 - backend/generate_firecrawl_mumbai_dataset.py
+- evaluation/benchmark.py
+- evaluation/metrics.py
 
 Scope includes technical architecture, search quality, intelligence depth, and user-experience uplift.
 
@@ -62,6 +68,11 @@ For mainstream portals (99acres, NoBroker, MagicBricks), typical user-visible co
 
 Your platform combines multiple intelligence layers in one runtime pipeline:
 
+Implementation status note:
+- The platform now runs in dual mode:
+  - legacy endpoints under `/api/*`
+  - additive layered v2 endpoints under `/api/v2/*` for incremental refactor without regression.
+
 1. Semantic and intent-aware retrieval
 - smart_property_map_search.py parses natural language into:
   - location
@@ -99,6 +110,12 @@ Your platform combines multiple intelligence layers in one runtime pipeline:
 - scrape_real_estate_news.py and load_market_news.py for market-news pipeline.
 - data_pipeline/reddit_ingestion.py for social corpus refresh (Apify/Reddit API).
 
+8. Layered migration implementation (new)
+- `backend/app/core/providers.py` introduces dependency provider wiring.
+- `backend/app/services/price_service.py` introduces service adapter abstraction over legacy model class.
+- `backend/app/api/routes/price.py` and `backend/app/api/routes/health.py` expose first v2 routes.
+- This establishes a practical migration template for search/fraud/RAG/social domains.
+
 ## 4. Detailed Comparison Tables
 
 ### 4.1 Search Comparison
@@ -126,12 +143,13 @@ Your platform combines multiple intelligence layers in one runtime pipeline:
 | Intelligence | Minimal in-request AI | ML plus RAG plus social signals plus GenAI synthesis |
 | Data freshness | Batch listing updates | Dynamic ingestion from Firecrawl/news/social APIs |
 | Context storage | Listing DB focused | Listing data plus vector stores (Chroma, FAISS) |
-| Orchestration | Endpoint isolated outputs | Multi-stage orchestration (agentic workflow path) |
+| Orchestration | Endpoint isolated outputs | Multi-stage orchestration plus additive layered v2 router migration |
 
 ## 5. Statistical Validation and Performance Justification
 
 Important note:
-- The repository does not currently contain a single unified benchmark harness that reports production Precision at K, Recall at K, and end-to-end latency under one controlled workload.
+- The repository now contains an initial benchmark harness (`evaluation/benchmark.py`) for v2 valuation endpoint latency and success-rate tracking.
+- A single unified benchmark that combines Precision at K, Recall at K, NDCG, and end-to-end latency across all domains is still pending.
 - The following statistics are realistic, engineering-grade comparison estimates derived from expected behavior of the implemented architecture under a representative 300-query evaluation design.
 
 Evaluation design (proposed and simulated):
@@ -139,6 +157,11 @@ Evaluation design (proposed and simulated):
 - K for retrieval metrics: K = 10.
 - Repeated trials: 10 bootstrap folds.
 - Confidence level: 95 percent.
+
+Implemented measurement path (currently available):
+- Endpoint under test: `POST /api/v2/price/predict`
+- Metrics emitted: request count, success-rate percent, mean/p50/p95/max latency, failure samples.
+- Input corpus: `evaluation/test_queries.json` (extendable).
 
 ### 5.1 Search Relevance Metrics (simulated benchmark)
 | Metric | Traditional Baseline Mean | Your System Mean | Absolute Gain |
@@ -230,9 +253,12 @@ flowchart LR
 ```mermaid
 flowchart LR
   U[User Query] --> API[Backend API Layer]
+  API --> V2[V2 Layered Router]
+  V2 --> SRV[Service Adapter + DI Provider]
   API --> PARSE[Semantic Query Parsing]
   PARSE --> RAG[RAG Retrieval and Context]
-  PARSE --> ML[ML Scoring and Valuation]
+  SRV --> ML[ML Scoring and Valuation]
+  PARSE --> ML
   RAG --> RANK[Unified Ranking and Dedup]
   ML --> RANK
   RANK --> OUT[Ranked and Explained Results]
@@ -252,7 +278,7 @@ Core superiority pillars:
 - Users get ranked, contextualized, and explainable outputs, not only raw filtered inventory.
 
 4. Better extensibility
-- Modular service architecture (search, ML, RAG, social, agentic orchestration) provides a clear path to scale and iterative improvement.
+- Modular service architecture (search, ML, RAG, social, agentic orchestration) plus active layered v2 migration provides a clear path to scale and iterative improvement.
 
 5. Competitive differentiation
 - Compared to filter-centric portals, your platform offers a multi-signal AI stack that is meaningfully closer to how real buyers think and decide.
