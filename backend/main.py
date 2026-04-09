@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Form, Req
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
+from difflib import SequenceMatcher
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -10,6 +11,7 @@ import os
 import logging
 import base64
 import asyncio
+import re
 import subprocess
 import sys
 import time
@@ -18,6 +20,7 @@ from pathlib import Path
 from threading import Thread
 from dotenv import load_dotenv
 import openai
+import requests
 import config
 
 # Import our custom modules
@@ -30,11 +33,13 @@ from models.neighborhood_engine import NeighborhoodEngine
 from models.amenity_matcher import AmenityMatcher
 from models.vastu_checker import VastuChecker
 from models.investment_advisor import InvestmentAdvisor
-from models.floorplan_generator import FloorplanGenerator
 from models.market_news_rag import MarketNewsRAG
 from models.contract_analyzer import ContractAnalyzer
 from models.agentic_workflow import AgenticWorkflow
+from models.smart_property_map_search import SmartPropertyMapSearch
+from models.social import SocialIntelligenceEngine
 from utils.data_processor import DataProcessor
+from app.api.router import v2_router
 
 load_dotenv()
 
@@ -48,6 +53,9 @@ app = FastAPI(
     description="AI-powered property search and analysis platform",
     version="1.0.0"
 )
+
+# Non-breaking v2 layered routes are added alongside existing endpoints.
+app.include_router(v2_router)
 
 # Configure CORS
 app.add_middleware(
@@ -68,11 +76,185 @@ neighborhood_engine = NeighborhoodEngine()
 amenity_matcher = AmenityMatcher()
 vastu_checker = VastuChecker()
 investment_advisor = InvestmentAdvisor()
-floorplan_generator = FloorplanGenerator()
 market_news_rag = MarketNewsRAG(persist_directory=config.RAG_PERSIST_DIR)
 contract_analyzer = ContractAnalyzer()
+smart_property_map_search = SmartPropertyMapSearch()
+social_intelligence_engine = None
 data_processor = DataProcessor()
 agentic_workflow = None
+FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v1"
+FIRECRAWL_SEED_URLS = [
+    "https://www.housing.com/in/buy/mumbai",
+    "https://www.magicbricks.com/property-for-sale/residential-real-estate?cityName=Mumbai",
+    "https://www.99acres.com/property-in-mumbai-ffid",
+    "https://www.nobroker.in/property/sale/mumbai/Mumbai",
+]
+_FIRECRAWL_REFERENCE_CACHE: Optional[List[Dict]] = None
+
+
+def _normalize_lookup_text(value: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _is_verified_image(url: Optional[str]) -> bool:
+    if not isinstance(url, str):
+        return False
+    cleaned = url.strip().lower()
+    if not cleaned.startswith("http"):
+        return False
+    blocked = ("logo", "icon", "svg", "sprite", "placeholder", "fallback", "nophotos", "badge", "banner")
+    return not any(token in cleaned for token in blocked)
+
+
+def _clean_image_list(images: List) -> List[str]:
+    cleaned: List[str] = []
+    seen = set()
+    for image in images or []:
+        if not _is_verified_image(image):
+            continue
+        image_str = str(image).strip()
+        if image_str in seen:
+            continue
+        seen.add(image_str)
+        cleaned.append(image_str)
+        if len(cleaned) == 3:
+            break
+    return cleaned
+
+
+def _load_firecrawl_reference_listings() -> List[Dict]:
+    global _FIRECRAWL_REFERENCE_CACHE
+    if _FIRECRAWL_REFERENCE_CACHE is not None:
+        return _FIRECRAWL_REFERENCE_CACHE
+
+    dataset_path = Path(__file__).resolve().parents[1] / "Datasets" / "firecrawl_mumbai_properties.json"
+    if not dataset_path.exists():
+        _FIRECRAWL_REFERENCE_CACHE = []
+        return _FIRECRAWL_REFERENCE_CACHE
+
+    try:
+        data = json.loads(dataset_path.read_text(encoding="utf-8"))
+        _FIRECRAWL_REFERENCE_CACHE = data if isinstance(data, list) else []
+    except Exception as exc:
+        logger.warning(f"Could not load Firecrawl reference dataset: {exc}")
+        _FIRECRAWL_REFERENCE_CACHE = []
+    return _FIRECRAWL_REFERENCE_CACHE
+
+
+def _score_property_match(raw_property: Dict, candidate: Dict) -> float:
+    raw_title = _normalize_lookup_text(raw_property.get("title") or raw_property.get("name"))
+    raw_location = _normalize_lookup_text(raw_property.get("location") or raw_property.get("address") or raw_property.get("city"))
+    cand_title = _normalize_lookup_text(candidate.get("title") or candidate.get("name"))
+    cand_location = _normalize_lookup_text(candidate.get("location") or candidate.get("city") or candidate.get("locality"))
+
+    title_score = SequenceMatcher(None, raw_title, cand_title).ratio() if raw_title and cand_title else 0.0
+    location_score = SequenceMatcher(None, raw_location, cand_location).ratio() if raw_location and cand_location else 0.0
+    exact_bonus = 0.2 if raw_title and cand_title and raw_title == cand_title else 0.0
+    location_bonus = 0.15 if raw_location and cand_location and raw_location == cand_location else 0.0
+    return title_score * 0.7 + location_score * 0.3 + exact_bonus + location_bonus
+
+
+def _find_firecrawl_reference_match(raw_property: Dict) -> Optional[Dict]:
+    candidates = _load_firecrawl_reference_listings()
+    if not candidates:
+        return None
+
+    best_match = None
+    best_score = 0.0
+    for candidate in candidates:
+        score = _score_property_match(raw_property, candidate)
+        if score > best_score:
+            best_score = score
+            best_match = candidate
+
+    return best_match if best_score >= 0.55 else None
+
+
+def _firecrawl_scrape_listing(raw_property: Dict) -> Optional[Dict]:
+    api_key = os.getenv("FIRECRAWL_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    title = str(raw_property.get("title") or raw_property.get("name") or "property").strip()
+    location = str(raw_property.get("location") or raw_property.get("address") or raw_property.get("city") or "Mumbai").strip()
+    query = f"{title} {location} Mumbai real estate"
+    session = requests.Session()
+    session.headers.update({"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+
+    def _discover_links(seed_url: str) -> List[str]:
+        try:
+            response = session.post(
+                f"{FIRECRAWL_BASE_URL}/map",
+                json={"url": seed_url, "limit": 25, "search": query},
+                timeout=60,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            links = payload.get("links") or payload.get("data") or []
+            if isinstance(links, dict):
+                links = links.get("links", [])
+            return [link for link in links if isinstance(link, str)]
+        except Exception as exc:
+            logger.debug(f"Firecrawl map discovery failed for {seed_url}: {exc}")
+            return []
+
+    def _scrape(url: str) -> Optional[Dict]:
+        try:
+            response = session.post(
+                f"{FIRECRAWL_BASE_URL}/scrape",
+                json={"url": url, "formats": ["markdown", "html"]},
+                timeout=90,
+            )
+            response.raise_for_status()
+            return response.json().get("data") or response.json()
+        except Exception as exc:
+            logger.debug(f"Firecrawl scrape failed for {url}: {exc}")
+            return None
+
+    for seed_url in FIRECRAWL_SEED_URLS:
+        for candidate_url in _discover_links(seed_url)[:5]:
+            scraped = _scrape(candidate_url)
+            if not isinstance(scraped, dict):
+                continue
+
+            metadata = scraped.get("metadata") or {}
+            markdown = str(scraped.get("markdown") or "")
+            html = str(scraped.get("html") or "")
+            text = _normalize_lookup_text(" ".join([
+                metadata.get("title") or "",
+                metadata.get("description") or "",
+                markdown,
+            ]))
+            if _normalize_lookup_text(title) not in text and _normalize_lookup_text(location) not in text:
+                continue
+
+            images = _clean_image_list([
+                metadata.get("ogImage"),
+                metadata.get("twitterImage"),
+                metadata.get("image"),
+                *re.findall(r"<img[^>]+src=[\"']([^\"']+)[\"']", html, flags=re.IGNORECASE),
+            ])
+
+            return {
+                "title": metadata.get("title") or title,
+                "name": metadata.get("title") or title,
+                "description": metadata.get("description") or scraped.get("markdown") or "",
+                "location": location,
+                "city": "Mumbai",
+                "locality": location,
+                "source": "firecrawl",
+                "source_url": candidate_url,
+                "bhk": raw_property.get("bhk"),
+                "size": raw_property.get("size"),
+                "price": raw_property.get("price"),
+                "pricePerSqft": raw_property.get("pricePerSqft"),
+                "amenities": raw_property.get("amenities") or [],
+                "images": images,
+                "latitude": None,
+                "longitude": None,
+            }
+
+    return None
 try:
     agentic_workflow = AgenticWorkflow(
         price_predictor=price_predictor,
@@ -119,6 +301,13 @@ def start_market_news_refresh():
 def encode_file_to_base64(file_bytes: bytes) -> str:
     """Encode file bytes to base64 string."""
     return base64.b64encode(file_bytes).decode("utf-8")
+
+
+def get_social_intelligence_engine():
+    global social_intelligence_engine
+    if social_intelligence_engine is None:
+        social_intelligence_engine = SocialIntelligenceEngine(genai_handler=genai_handler)
+    return social_intelligence_engine
 
 # Pydantic models
 class Property(BaseModel):
@@ -179,6 +368,7 @@ class RecommendationRequest(BaseModel):
 class RecommendationResponse(BaseModel):
     listings: List[dict]
     count: int
+    map: Optional[Dict] = None
 
 class CompareRequest(BaseModel):
     title: str
@@ -193,6 +383,16 @@ class CompareResponse(BaseModel):
     offers: List[dict]
     best_price: float
     avg_price: float
+
+class PropertyDetailRequest(BaseModel):
+    property: Dict
+
+
+class PropertyDetailResponse(BaseModel):
+    property: Dict
+    map: Optional[Dict] = None
+    comparison: Optional[Dict] = None
+    similar: List[Dict] = []
 
 class NeighborhoodRequest(BaseModel):
     location: str
@@ -239,37 +439,6 @@ class InvestmentForecastResponse(BaseModel):
     investment_thesis: str
     formatted_thesis: Optional[str] = None
     timestamp: str
-
-# ==================== FLOORPLAN GENERATOR MODELS ====================
-
-class FloorplanGenerateRequest(BaseModel):
-    boundary_wkt: str
-    front_door_wkt: str
-    room_centroids: List[List[float]]
-    bathroom_centroids: Optional[List[List[float]]] = []
-    kitchen_centroids: Optional[List[List[float]]] = []
-
-
-class FloorplanGraphEdge(BaseModel):
-    source: int
-    target: int
-
-
-class FloorplanNodePrediction(BaseModel):
-    id: int
-    type: str
-    centroid: List[float]
-    predicted_width: float
-    predicted_height: float
-
-
-class FloorplanGenerateResponse(BaseModel):
-    success: bool
-    image_base64: Optional[str] = None
-    graph: Optional[Dict] = None
-    nodes: List[FloorplanNodePrediction] = []
-    message: str
-    error: Optional[str] = None
 
 # ==================== CONTRACT ANALYZER MODELS ====================
 
@@ -515,12 +684,99 @@ async def get_recommendations(request: RecommendationRequest):
             'bhk': request.bhk,
             'amenities': request.amenities
         }
-        
-        recommendations = recommendation_engine.get_recommendations(preferences)
-        
+
+        # 1) Dataset-driven recommendations (existing behavior)
+        dataset_recommendations = recommendation_engine.get_recommendations(preferences)
+
+        # 2) SERP API map-aware recommendations (new behavior)
+        serp_matches: List[Dict] = []
+        map_payload: Optional[Dict] = None
+        try:
+            if request.location and getattr(smart_property_map_search, "serpapi_key", ""):
+                budget_hint = ""
+                if request.budget_max and request.budget_max > 0:
+                    budget_hint = f" under {int(request.budget_max / 10000000)} crore"
+                bhk_hint = f"{request.bhk} bhk " if request.bhk else ""
+                query = f"{bhk_hint}apartment in {request.location}{budget_hint}".strip()
+
+                serp_result = smart_property_map_search.search(
+                    query=query,
+                    lifestyle=None,
+                    top_k=12,
+                )
+                serp_matches = serp_result.get("matches", []) or []
+                map_payload = serp_result.get("map")
+        except Exception as serp_exc:
+            logger.warning(f"SERP map search fallback to dataset-only: {serp_exc}")
+
+        # Normalize SERP matches into the same listing contract used by the Search page.
+        normalized_serp = []
+        for idx, item in enumerate(serp_matches):
+            price_numeric = item.get("priceNumeric")
+            if price_numeric is None:
+                if request.budget_min and request.budget_max and request.budget_max > request.budget_min:
+                    price_numeric = (request.budget_min + request.budget_max) / 2.0
+                elif request.budget_max and request.budget_max > 0:
+                    price_numeric = request.budget_max * 0.85
+                else:
+                    price_numeric = 7500000.0
+
+            normalized_serp.append(
+                {
+                    "id": f"serp_{item.get('id') or idx}",
+                    "title": item.get("name") or "SERP Property",
+                    "description": item.get("address") or "",
+                    "location": item.get("city") or item.get("locality") or request.location or "",
+                    "bhk": item.get("bhk") or request.bhk,
+                    "size": None,
+                    "price": float(price_numeric),
+                    "seller": "SERP API",
+                    "amenities": item.get("amenities", []),
+                    "images": [],
+                    "rating": 4.0,
+                    "views": 0,
+                    "posted_date": datetime.now().strftime("%Y-%m-%d"),
+                    "match_score": round(float(item.get("similarity_score", 0.6)) * 100, 2),
+                    "match_reasons": item.get("match_reasons", ["Matched from live map search"]),
+                    "latitude": item.get("latitude"),
+                    "longitude": item.get("longitude"),
+                    "source": "serpapi",
+                }
+            )
+
+        # Merge SERP + dataset, de-duplicate by title+location, and keep ranking by match score.
+        merged: List[Dict] = []
+        seen_keys = set()
+        for listing in (normalized_serp + dataset_recommendations):
+            key = f"{str(listing.get('title', '')).strip().lower()}|{str(listing.get('location', '')).strip().lower()}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            if "source" not in listing:
+                listing["source"] = "dataset"
+            merged.append(listing)
+
+        merged.sort(key=lambda item: float(item.get("match_score", 0) or 0), reverse=True)
+        top_listings = merged[:15]
+
+        # Fallback map center from first coordinate-rich listing if SERP center unavailable.
+        if not map_payload:
+            with_coords = [x for x in top_listings if x.get("latitude") is not None and x.get("longitude") is not None]
+            if with_coords:
+                map_payload = {
+                    "center": {
+                        "latitude": float(with_coords[0]["latitude"]),
+                        "longitude": float(with_coords[0]["longitude"]),
+                        "label": request.location or "Search area",
+                        "source": "listings",
+                    },
+                    "marker_count": len(with_coords),
+                }
+
         return RecommendationResponse(
-            listings=recommendations[:15],
-            count=len(recommendations[:15])
+            listings=top_listings,
+            count=len(top_listings),
+            map=map_payload,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -546,6 +802,116 @@ async def compare_listings(request: CompareRequest):
     try:
         comparison = comparison_engine.compare(request.dict())
         return CompareResponse(**comparison)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/properties/enrich", response_model=PropertyDetailResponse)
+async def enrich_property_detail(request: PropertyDetailRequest):
+    """Return property-specific details, comparison data, and a live map center."""
+    try:
+        raw_property = request.property or {}
+
+        listing = None
+        property_id = str(raw_property.get("id") or "").strip()
+        property_title = str(raw_property.get("title") or raw_property.get("name") or "Property").strip()
+        property_location = str(raw_property.get("location") or raw_property.get("address") or raw_property.get("city") or "").strip()
+
+        for item in getattr(recommendation_engine, "listings", []):
+            item_id = str(item.get("id") or "")
+            item_title = str(item.get("title") or item.get("name") or "")
+            if property_id and item_id == property_id and _normalize_lookup_text(item_title) == _normalize_lookup_text(property_title):
+                listing = item
+                break
+            if property_title and item_title.lower() == property_title.lower():
+                listing = item
+                break
+
+        if listing is None:
+            listing = _find_firecrawl_reference_match(raw_property) or _firecrawl_scrape_listing(raw_property) or raw_property
+
+        images = _clean_image_list(listing.get("images") or [listing.get("image"), listing.get("image2"), listing.get("image3")])
+
+        normalized_property = {
+            "id": str(listing.get("id") or property_id or property_title),
+            "title": listing.get("title") or property_title,
+            "location": listing.get("location") or property_location,
+            "city": listing.get("city") or raw_property.get("city") or "Mumbai",
+            "bhk": listing.get("bhk") or raw_property.get("bhk"),
+            "size": float(listing.get("size") or raw_property.get("size") or 0),
+            "price": float(listing.get("price") or raw_property.get("price") or 0),
+            "priceLabel": raw_property.get("priceLabel") or raw_property.get("price") or listing.get("priceLabel"),
+            "description": listing.get("description") or raw_property.get("description") or "",
+            "amenities": [a for a in (listing.get("amenities") or raw_property.get("amenities") or []) if str(a).strip().lower() != "nan"],
+            "images": images,
+            "source": listing.get("source") or raw_property.get("source") or "dataset",
+            "seller": listing.get("seller") or raw_property.get("seller") or raw_property.get("developer") or "Unknown",
+            "pricePerSqft": raw_property.get("pricePerSqft") or raw_property.get("price_per_sqft") or None,
+            "trustScore": raw_property.get("trustScore") or 75,
+            "latitude": raw_property.get("latitude") or listing.get("latitude"),
+            "longitude": raw_property.get("longitude") or listing.get("longitude"),
+        }
+
+        if normalized_property["pricePerSqft"] is None and normalized_property["price"] and normalized_property["size"]:
+            try:
+                normalized_property["pricePerSqft"] = round(float(normalized_property["price"]) / float(normalized_property["size"]))
+            except Exception:
+                normalized_property["pricePerSqft"] = None
+
+        if normalized_property["size"]:
+            try:
+                normalized_property["size"] = round(float(normalized_property["size"]), 1)
+            except Exception:
+                pass
+
+        if (normalized_property["latitude"] is None or normalized_property["longitude"] is None) and property_location:
+            try:
+                serp_result = smart_property_map_search.search(
+                    query=f"{property_title} {property_location}",
+                    lifestyle=None,
+                    top_k=1,
+                )
+                serp_map = serp_result.get("map") or {}
+                center = serp_map.get("center") or {}
+                normalized_property["latitude"] = center.get("latitude")
+                normalized_property["longitude"] = center.get("longitude")
+            except Exception as serp_exc:
+                logger.warning(f"Could not enrich map for {property_title}: {serp_exc}")
+
+        comparison = comparison_engine.compare({
+            "title": normalized_property["title"],
+            "location": normalized_property["location"],
+            "price": normalized_property["price"],
+            "bhk": normalized_property["bhk"],
+            "size": normalized_property["size"],
+        })
+
+        similar = recommendation_engine.get_recommendations({
+            "budget_min": max(0, normalized_property["price"] * 0.7 if normalized_property["price"] else 0),
+            "budget_max": normalized_property["price"] * 1.3 if normalized_property["price"] else float("inf"),
+            "location": normalized_property["location"],
+            "bhk": normalized_property["bhk"],
+            "amenities": normalized_property["amenities"][:3],
+        })[:6]
+
+        map_payload = None
+        if normalized_property["latitude"] is not None and normalized_property["longitude"] is not None:
+            map_payload = {
+                "center": {
+                    "latitude": float(normalized_property["latitude"]),
+                    "longitude": float(normalized_property["longitude"]),
+                    "label": normalized_property["location"] or normalized_property["title"],
+                    "source": "serpapi" if getattr(smart_property_map_search, "serpapi_key", "") else "dataset",
+                },
+                "marker_count": 1,
+            }
+
+        return PropertyDetailResponse(
+            property=normalized_property,
+            map=map_payload,
+            comparison=comparison,
+            similar=similar,
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -656,43 +1022,18 @@ async def match_amenities(request: LifestyleMatchRequest):
 @app.post("/api/genai/cross-modal-match")
 async def cross_modal_property_search(request: CrossModalSearchRequest):
     """
-    Advanced cross-modal property search with semantic matching and visual montages.
-    
-    Bridges lifestyle profiles with semantic text embeddings using FAISS indexing,
-    generates visual montages of matching properties.
-    
-    Args:
-        query: Search query (e.g., "Affordable sea-view flat with gym")
-        lifestyle: Optional lifestyle profile to optimize query
-        top_k: Number of results to return (default 6)
-        use_cross_modal: Use cross-modal matcher vs fallback (default True)
-    
-    Returns:
-        Matches with property details, visual montage (base64), search metadata
+    Natural-language smart property discovery with map-ready results.
+
+    Breaks the user sentence into structured requirements, scores local
+    property inventory against those requirements, and returns matches
+    with coordinates and price labels for the Home-page map panel.
     """
     try:
-        result = amenity_matcher.get_cross_modal_recommendations(
+        result = smart_property_map_search.search(
             query=request.query,
             lifestyle=request.lifestyle,
             top_k=request.top_k,
-            use_cross_modal=request.use_cross_modal
         )
-        
-        # Normalize response format for frontend
-        # If this is a fallback result (has 'matched_amenities' but not 'matches')
-        if 'matched_amenities' in result and 'matches' not in result:
-            # Convert from amenity matcher format to cross-modal format
-            matches = result.get('top_properties', [])
-            
-            # Normalize score field (amenity uses 'score', cross-modal uses 'similarity_score')
-            for match in matches:
-                if 'score' in match and 'similarity_score' not in match:
-                    match['similarity_score'] = match.pop('score')
-            
-            result['matches'] = matches
-            result['search_type'] = 'fallback_amenity'
-            result['montage'] = None
-        
         return result
     except Exception as e:
         logger.error(f"Cross-modal search error: {e}")
@@ -911,6 +1252,42 @@ async def get_market_insights(location: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+@app.get("/api/social-analysis")
+async def get_social_analysis(
+    area: str,
+    top_k: int = 5,
+    time_window_days: Optional[int] = None,
+):
+    """
+    Analyze stored Reddit-style social discussions for an area.
+
+    Uses location normalization, relevance filtering, FAISS retrieval,
+    sentiment/aspect extraction, and a structured report generator.
+    """
+    logger.info(f"[Social Analysis] Received request for area: {area}")
+    try:
+        cleaned_area = (area or "").strip()
+        if not cleaned_area:
+            raise HTTPException(status_code=400, detail="area is required")
+
+        logger.info(f"[Social Analysis] Getting engine and analyzing area: {cleaned_area}")
+        engine = get_social_intelligence_engine()
+        logger.info(f"[Social Analysis] Engine retrieved: {engine}")
+        
+        result = engine.analyze_area(
+            area=cleaned_area,
+            top_k=max(1, min(top_k, 10)),
+            time_window_days=time_window_days,
+        )
+        logger.info(f"[Social Analysis] Analysis complete. Keys: {list(result.keys()) if result else 'None'}")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Social Analysis] Error running social analysis for {area}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ==================== MARKET NEWS RAG ENDPOINTS ====================
 
 @app.get("/api/genai/market-alerts/{location}")
@@ -1067,46 +1444,6 @@ async def vastu_check_v2(request: VastuRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-# ==================== FLOORPLAN GENERATOR ENDPOINTS ====================
-
-@app.post("/api/floorplan/generate", response_model=FloorplanGenerateResponse)
-async def generate_floorplan(request: FloorplanGenerateRequest):
-    """
-    Generate a floor plan from user constraints using a GNN-style graph pipeline.
-    """
-    try:
-        result = floorplan_generator.generate(
-            boundary_wkt=request.boundary_wkt,
-            front_door_wkt=request.front_door_wkt,
-            room_centroids=request.room_centroids or [],
-            bathroom_centroids=request.bathroom_centroids or [],
-            kitchen_centroids=request.kitchen_centroids or [],
-        )
-
-        if not result.get("success"):
-            return FloorplanGenerateResponse(
-                success=False,
-                image_base64=None,
-                graph=None,
-                nodes=[],
-                message=result.get("message", "Generation failed"),
-                error=result.get("error", "Unable to generate floorplans"),
-            )
-
-        node_predictions = [FloorplanNodePrediction(**n) for n in result.get("nodes", [])]
-        return FloorplanGenerateResponse(
-            success=True,
-            image_base64=result.get("image_base64"),
-            graph=result.get("graph"),
-            nodes=node_predictions,
-            message=result.get("message", "Floor plan generated successfully"),
-            error=None,
-        )
-    except Exception as e:
-        logger.error(f"Error generating floorplans: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating floorplans: {str(e)}")
-
 
 # ==================== CONTRACT ANALYZER ENDPOINTS ====================
 

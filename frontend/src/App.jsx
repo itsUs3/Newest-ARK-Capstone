@@ -16,8 +16,7 @@ import VastuChecker from './pages/VastuChecker'
 import InvestmentAnalyzer from './pages/InvestmentAnalyzer'
 import MarketNews from './pages/MarketNews'
 import ContractAnalyzer from './pages/ContractAnalyzer'
-
-const GnnFloorPlanPage = lazy(() => import('./pages/FloorplanGenerator'))
+import Social from './pages/Social'
 
 class RouteErrorBoundary extends React.Component {
   constructor(props) {
@@ -64,17 +63,7 @@ function App() {
             <Route path="/location-booster" element={<LocationBooster />} />
             <Route path="/amenity-matcher" element={<AmenityMatcher />} />
             <Route path="/vastu-checker" element={<VastuChecker />} />
-            <Route
-              path="/gnn-floorplan"
-              element={(
-                <RouteErrorBoundary>
-                  <Suspense fallback={<div className="text-slate-300 p-6">Loading GNN floor plan module...</div>}>
-                    <GnnFloorPlanPage />
-                  </Suspense>
-                </RouteErrorBoundary>
-              )}
-            />
-            <Route path="/floorplan-generator" element={<Navigate to="/gnn-floorplan" replace />} />
+            <Route path="/social" element={<Social />} />
             <Route path="/market-news" element={<MarketNews />} />
             <Route path="/contract-analyzer" element={<ContractAnalyzer />} />
           </Routes>

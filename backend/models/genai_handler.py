@@ -3,6 +3,7 @@ import re
 import logging
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+import requests
 import config
 
 try:
@@ -25,6 +26,12 @@ class GenAIHandler:
         self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
 
         self.use_llm = os.getenv("GENAI_USE_LLM", str(config.GENAI_USE_LLM).lower()).lower() == "true"
+        self.primary_provider = os.getenv("GENAI_PRIMARY_PROVIDER", config.GENAI_PRIMARY_PROVIDER).lower()
+
+        self.ollama_enabled = os.getenv("OLLAMA_ENABLED", str(config.OLLAMA_ENABLED).lower()).lower() == "true"
+        self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", config.OLLAMA_BASE_URL).rstrip("/")
+        self.ollama_model = os.getenv("OLLAMA_MODEL", config.OLLAMA_MODEL)
+        self.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", str(config.OLLAMA_TIMEOUT_SECONDS)))
 
         self.temperature_default = float(os.getenv("GENAI_TEMPERATURE", str(config.GENAI_TEMPERATURE)))
         self.temperature_by_task = {
@@ -43,18 +50,15 @@ class GenAIHandler:
         self.client = None
         self.investment_advisor = None
         if self.use_llm:
-            if not self.api_key:
-                logger.warning("GENAI_USE_LLM=true but OPENAI_API_KEY is missing. Falling back to rule-based outputs.")
-                self.use_llm = False
-            elif OpenAI is None:
-                logger.warning("openai package unavailable. Falling back to rule-based outputs.")
-                self.use_llm = False
-            else:
+            if self.api_key and OpenAI is not None:
                 try:
                     self.client = OpenAI(api_key=self.api_key)
                 except Exception as exc:
-                    logger.warning(f"Failed to initialize OpenAI client: {exc}. Falling back to rule-based outputs.")
-                    self.use_llm = False
+                    logger.warning(f"Failed to initialize OpenAI backup client: {exc}")
+
+            if not self.ollama_enabled and not self.client:
+                logger.warning("No LLM provider available (Ollama disabled and OpenAI unavailable). Falling back to rule-based outputs.")
+                self.use_llm = False
 
         try:
             from models.investment_advisor import InvestmentAdvisor
@@ -143,43 +147,76 @@ class GenAIHandler:
         context_chunks: Optional[List[str]] = None,
         verify_grounding: bool = True,
     ) -> str:
-        if not self.use_llm or not self.client:
+        if not self.use_llm:
             return self._normalize_output(fallback_text)
 
-        try:
-            prompt = self._build_grounded_prompt(instruction, context_chunks)
+        prompt = self._build_grounded_prompt(instruction, context_chunks)
+        system_prompt = (
+            "You are a careful Indian real-estate assistant. "
+            "Stay factual, concise, and transparent about uncertainty."
+        )
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a careful Indian real-estate assistant. "
-                            "Stay factual, concise, and transparent about uncertainty."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=self._get_temperature(task),
-                max_tokens=self.max_output_tokens,
-            )
+        providers = [self.primary_provider, "openai" if self.primary_provider == "ollama" else "ollama"]
 
-            content = ""
-            if response and response.choices:
-                content = (response.choices[0].message.content or "").strip()
+        for provider in providers:
+            try:
+                if provider == "ollama":
+                    if not self.ollama_enabled:
+                        continue
 
-            if not content:
-                return self._normalize_output(fallback_text)
+                    content = self._call_ollama(system_prompt, prompt, self._get_temperature(task))
+                else:
+                    if not self.client:
+                        continue
 
-            if verify_grounding and not self._is_grounded_response(content, context_chunks):
-                logger.warning("Grounding check failed; returning fallback response")
-                return self._normalize_output(fallback_text)
+                    content = self._call_openai(system_prompt, prompt, self._get_temperature(task))
 
-            return self._normalize_output(content)
-        except Exception as exc:
-            logger.warning(f"LLM generation failed, falling back safely: {exc}")
-            return self._normalize_output(fallback_text)
+                if not content:
+                    continue
+
+                if verify_grounding and not self._is_grounded_response(content, context_chunks):
+                    logger.warning("Grounding check failed for provider %s", provider)
+                    continue
+
+                return self._normalize_output(content)
+
+            except Exception as exc:
+                logger.warning("Provider %s failed, trying fallback: %s", provider, exc)
+
+        return self._normalize_output(fallback_text)
+
+    def _call_openai(self, system_prompt: str, prompt: str, temperature: float) -> str:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=temperature,
+            max_tokens=self.max_output_tokens,
+        )
+        if response and response.choices:
+            return (response.choices[0].message.content or "").strip()
+        return ""
+
+    def _call_ollama(self, system_prompt: str, prompt: str, temperature: float) -> str:
+        payload = {
+            "model": self.ollama_model,
+            "prompt": f"{system_prompt}\n\n{prompt}",
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": self.max_output_tokens,
+            },
+        }
+        response = requests.post(
+            f"{self.ollama_base_url}/api/generate",
+            json=payload,
+            timeout=self.ollama_timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return (data.get("response") or "").strip()
     
     def generate_description(self, title: str, location: str, bhk: int = None, 
                             size: float = None, amenities: List[str] = None) -> str:

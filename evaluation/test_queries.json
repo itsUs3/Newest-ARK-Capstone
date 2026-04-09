@@ -1,0 +1,26 @@
+[
+  {
+    "location": "Mumbai",
+    "bhk": 2,
+    "size": 950,
+    "amenities": ["Gym", "Parking"],
+    "furnishing": "Semi-Furnished",
+    "construction_status": "Ready to Move"
+  },
+  {
+    "location": "Bangalore",
+    "bhk": 3,
+    "size": 1400,
+    "amenities": ["Pool", "Security", "Lift"],
+    "furnishing": "Furnished",
+    "construction_status": "Under Construction"
+  },
+  {
+    "location": "Pune",
+    "bhk": 1,
+    "size": 620,
+    "amenities": ["Parking"],
+    "furnishing": "Unfurnished",
+    "construction_status": "Ready to Move"
+  }
+]

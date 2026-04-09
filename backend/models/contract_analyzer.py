@@ -13,13 +13,17 @@ import pandas as pd
 from pathlib import Path
 import logging
 
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
+
 try:
     from sentence_transformers import SentenceTransformer
     import chromadb
+    from chromadb.config import Settings
     RAG_AVAILABLE = True
 except Exception as e:
     SentenceTransformer = None
     chromadb = None
+    Settings = None
     RAG_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -343,9 +347,10 @@ class ContractAnalyzer:
     Uses pattern matching + semantic search for comprehensive RERA analysis
     """
     
-    def __init__(self, persist_directory: str = "chroma_db"):
+    def __init__(self, persist_directory: str = "chroma_db_contracts"):
         """Initialize Contract Analyzer"""
-        self.persist_directory = persist_directory
+        self.base_dir = Path(__file__).resolve().parents[2]
+        self.persist_directory = str(self._preferred_persist_directory(persist_directory))
         self.embedding_model = None
         self.chroma_client = None
         self.collection_name = "rera_laws"
@@ -354,17 +359,83 @@ class ContractAnalyzer:
         if self.rag_enabled:
             try:
                 logger.info("Loading embedding model for contract analysis...")
-                self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+                self.embedding_model = SentenceTransformer(self._resolve_embedding_model())
                 logger.info("Initializing ChromaDB for contracts...")
-                self.chroma_client = chromadb.PersistentClient(path=persist_directory)
+                self.chroma_client = chromadb.PersistentClient(
+                    path=self.persist_directory,
+                    settings=self._chroma_settings(),
+                )
             except Exception as e:
-                logger.warning(f"Contract analyzer RAG unavailable ({e}); falling back to pattern-only mode")
-                self.rag_enabled = False
+                if self._is_schema_mismatch_error(e):
+                    logger.warning(
+                        f"Contract analyzer detected incompatible Chroma schema. Recovering runtime store: {e}"
+                    )
+                    try:
+                        self._recover_with_runtime_store()
+                    except Exception as recover_error:
+                        logger.warning(
+                            f"Contract analyzer RAG unavailable after schema recovery ({recover_error}); "
+                            "falling back to pattern-only mode"
+                        )
+                        self.rag_enabled = False
+                else:
+                    logger.warning(f"Contract analyzer RAG unavailable ({e}); falling back to pattern-only mode")
+                    self.rag_enabled = False
         else:
             logger.warning("Contract analyzer running in pattern-only mode (RAG dependencies unavailable)")
         
         # Initialize law knowledge base
         self._initialize_law_kb()
+
+    def _preferred_persist_directory(self, persist_directory: str) -> Path:
+        persist_path = Path(persist_directory)
+        runtime_path = self._runtime_persist_directory_for(persist_path)
+        if persist_path.name.endswith("_runtime"):
+            return runtime_path
+        if runtime_path.exists():
+            return runtime_path
+        return persist_path
+
+    def _runtime_persist_directory_for(self, persist_path: Path) -> Path:
+        name = persist_path.name
+        while name.endswith("_contracts_runtime"):
+            name = name[:-len("_contracts_runtime")]
+        while name.endswith("_runtime"):
+            name = name[:-len("_runtime")]
+        return persist_path.with_name(f"{name}_runtime")
+
+    def _chroma_settings(self):
+        if Settings is None:
+            return None
+        return Settings(anonymized_telemetry=False)
+
+    def _resolve_embedding_model(self) -> str:
+        candidate_paths = [
+            self.base_dir / "backend" / "models" / "real_estate_embeddings",
+            self.base_dir / "backend" / "models" / "backend" / "models" / "real_estate_embeddings",
+        ]
+        for candidate in candidate_paths:
+            if candidate.exists():
+                return str(candidate)
+        return "all-MiniLM-L6-v2"
+
+    def _is_schema_mismatch_error(self, error: Exception) -> bool:
+        msg = str(error).lower()
+        return (
+            "no such column" in msg
+            or "schema" in msg
+            or "mismatch" in msg
+            or "collections.topic" in msg
+        )
+
+    def _recover_with_runtime_store(self):
+        runtime_dir = self._runtime_persist_directory_for(Path(self.persist_directory))
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.persist_directory = str(runtime_dir)
+        self.chroma_client = chromadb.PersistentClient(
+            path=self.persist_directory,
+            settings=self._chroma_settings(),
+        )
     
     def _ensure_collection_exists(self):
         """Ensure collection exists"""
@@ -372,11 +443,24 @@ class ContractAnalyzer:
             return None
         try:
             return self.chroma_client.get_collection(name=self.collection_name)
-        except Exception:
-            return self.chroma_client.create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
+        except Exception as e:
+            if self._is_schema_mismatch_error(e):
+                logger.warning(f"Contract analyzer detected incompatible Chroma schema. Switching to runtime store: {e}")
+                self._recover_with_runtime_store()
+                try:
+                    return self.chroma_client.create_collection(
+                        name=self.collection_name,
+                        metadata={"hnsw:space": "cosine"}
+                    )
+                except Exception:
+                    return self.chroma_client.get_collection(name=self.collection_name)
+            try:
+                return self.chroma_client.create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
+            except Exception:
+                return self.chroma_client.get_collection(name=self.collection_name)
     
     def _initialize_law_kb(self):
         """Initialize RERA law knowledge base in ChromaDB"""

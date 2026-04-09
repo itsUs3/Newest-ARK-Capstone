@@ -52,13 +52,14 @@ class CrossModalMatcher:
         """
         self.persist_directory = persist_directory
         self.persist_path = os.path.join(persist_directory, "property_index")
+        self.base_dir = Path(__file__).resolve().parents[2]
         
         # Set image directory
-        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.IMAGE_DIR = os.path.join(base, "data", "housing1_images")
+        self.IMAGE_DIR = os.path.join(self.base_dir, "data", "housing1_images")
         
         logger.info(f"📦 Loading embedding model: {self.EMBEDDING_MODEL}...")
-        self.model = SentenceTransformer(self.EMBEDDING_MODEL)
+        self.model_name = self._resolve_embedding_model()
+        self.model = SentenceTransformer(self.model_name)
         self.embedding_dim = 384  # MiniLM output dimension
         
         # Property database
@@ -73,10 +74,19 @@ class CrossModalMatcher:
         self._load_properties()
         self._build_indices()
     
+    def _resolve_embedding_model(self) -> str:
+        candidate_paths = [
+            self.base_dir / "backend" / "models" / "real_estate_embeddings",
+            self.base_dir / "backend" / "models" / "backend" / "models" / "real_estate_embeddings",
+        ]
+        for candidate in candidate_paths:
+            if candidate.exists():
+                return str(candidate)
+        return "all-MiniLM-L6-v2"
+
     def _dataset_path(self, filename: str) -> Optional[str]:
         """Resolve dataset file path."""
-        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        p = os.path.join(base, "Datasets", filename)
+        p = os.path.join(self.base_dir, "Datasets", filename)
         if os.path.exists(p):
             return p
         return None
@@ -439,5 +449,5 @@ class CrossModalMatcher:
             'index_size': len(self.properties),
             'embedding_dimension': self.embedding_dim,
             'search_types_supported': ['text', 'image', 'hybrid'],
-            'model': self.EMBEDDING_MODEL
+            'model': getattr(self, 'model_name', self.EMBEDDING_MODEL)
         }

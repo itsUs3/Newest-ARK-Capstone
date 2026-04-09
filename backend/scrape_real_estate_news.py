@@ -13,6 +13,7 @@ import random
 import os
 from typing import List, Dict
 import logging
+from requests import HTTPError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,42 +32,74 @@ class RealEstateNewsScraper:
             {
                 'url': 'https://economictimes.indiatimes.com/wealth/real-estate/rssfeeds/48101904.cms',
                 'source': 'Economic Times',
-                'category': 'real-estate'
+                'category': 'real-estate',
+                'fallback_queries': [
+                    'site:economictimes.indiatimes.com real estate india',
+                    'Economic Times real estate india',
+                ]
             },
             {
                 'url': 'https://www.moneycontrol.com/rss/realestate.xml',
                 'source': 'MoneyControl',
-                'category': 'real-estate'
+                'category': 'real-estate',
+                'fallback_queries': [
+                    'site:moneycontrol.com real estate india',
+                    'MoneyControl property india',
+                ]
             },
             {
                 'url': 'https://housing.com/news/feed/',
                 'source': 'Housing.com News',
-                'category': 'real-estate'
+                'category': 'real-estate',
+                'fallback_queries': [
+                    'site:housing.com/news property india',
+                    'Housing.com news real estate india',
+                ]
             },
             {
                 'url': 'https://www.hindustantimes.com/feeds/rss/real-estate',
                 'source': 'Hindustan Times',
-                'category': 'real-estate'
+                'category': 'real-estate',
+                'fallback_queries': [
+                    'site:hindustantimes.com real estate india',
+                    'Hindustan Times property india',
+                ]
             },
             {
                 'url': 'https://www.indiatoday.in/rss/real-estate',
                 'source': 'India Today',
-                'category': 'real-estate'
+                'category': 'real-estate',
+                'fallback_queries': [
+                    'site:indiatoday.in real estate india',
+                    'India Today property india',
+                ]
             },
             {
                 'url': 'https://www.financialexpress.com/industry/real-estate/feed/',
                 'source': 'Financial Express',
-                'category': 'real-estate'
+                'category': 'real-estate',
+                'fallback_queries': [
+                    'site:financialexpress.com real estate india',
+                    'Financial Express property india',
+                ]
             },
             {
                 'url': 'https://www.business-standard.com/rss/real-estate-107.rss',
                 'source': 'Business Standard',
-                'category': 'real-estate'
+                'category': 'real-estate',
+                'fallback_queries': [
+                    'site:business-standard.com real estate india',
+                    'Business Standard property india',
+                ]
             },
             {
                 'url': 'https://www.livemint.com/rss/companies/real-estate',
                 'source': 'LiveMint',
-                'category': 'real-estate'
+                'category': 'real-estate',
+                'fallback_queries': [
+                    'site:livemint.com real estate india',
+                    'LiveMint property india',
+                ]
             },
             {
                 'url': 'https://news.google.com/rss/search?q=real+estate+india&hl=en-IN&gl=IN&ceid=IN:en',
@@ -85,16 +118,42 @@ class RealEstateNewsScraper:
             }
         ]
 
-    def _fetch_feed_entries(self, feed_url: str) -> List[Dict]:
+    def _google_news_feed(self, query: str) -> str:
+        encoded_query = requests.utils.quote(query)
+        return f'https://news.google.com/rss/search?q={encoded_query}&hl=en-IN&gl=IN&ceid=IN:en'
+
+    def _fetch_feed_entries(self, feed_url: str, label: str) -> List[Dict]:
         """Fetch RSS feed with headers and return entries"""
         try:
             response = requests.get(feed_url, headers=self.headers, timeout=15)
             response.raise_for_status()
             feed = feedparser.parse(response.content)
+            if getattr(feed, 'bozo', False):
+                logger.warning(f"Feed parser reported malformed RSS for {label}: {getattr(feed, 'bozo_exception', 'unknown parser issue')}")
             return feed.entries
-        except Exception as e:
-            logger.error(f"Error fetching feed {feed_url}: {str(e)}")
+        except HTTPError as e:
+            status_code = getattr(e.response, 'status_code', None)
+            logger.warning(f"Feed unavailable for {label} ({status_code}): {feed_url}")
             return []
+        except Exception as e:
+            logger.warning(f"Error fetching feed for {label}: {str(e)}")
+            return []
+
+    def _fetch_with_fallbacks(self, feed_info: Dict) -> List[Dict]:
+        """Try direct feed first, then fall back to Google News search feeds."""
+        entries = self._fetch_feed_entries(feed_info['url'], feed_info['source'])
+        if entries:
+            return entries
+
+        fallback_queries = feed_info.get('fallback_queries', [])
+        for query in fallback_queries:
+            fallback_url = self._google_news_feed(query)
+            logger.info(f"Trying fallback feed for {feed_info['source']}: {query}")
+            entries = self._fetch_feed_entries(fallback_url, f"{feed_info['source']} fallback")
+            if entries:
+                return entries
+
+        return []
     
     def scrape_rss_feeds(self) -> List[Dict]:
         """Scrape news from RSS feeds"""
@@ -103,7 +162,11 @@ class RealEstateNewsScraper:
         for feed_info in self.rss_feeds:
             try:
                 logger.info(f"Fetching from {feed_info['source']}...")
-                entries = self._fetch_feed_entries(feed_info['url'])
+                entries = self._fetch_with_fallbacks(feed_info)
+
+                if not entries:
+                    logger.warning(f"No feed entries available for {feed_info['source']} after trying alternatives")
+                    continue
                 
                 for entry in entries[:30]:  # Limit to 30 articles per feed
                     article = self._parse_rss_entry(entry, feed_info['source'])
@@ -213,7 +276,8 @@ class RealEstateNewsScraper:
         
         try:
             url = "https://housing.com/news/"
-            response = requests.get(url, headers=self.headers, timeout=10, verify=False)
+            response = requests.get(url, headers=self.headers, timeout=10)
+            response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
             
             # Find article links (adjust selectors based on actual site structure)
@@ -253,7 +317,7 @@ class RealEstateNewsScraper:
             time.sleep(random.uniform(1, 2))
             
         except Exception as e:
-            logger.error(f"Error scraping Housing.com: {str(e)}")
+            logger.warning(f"Error scraping Housing.com page directly: {str(e)}")
         
         return articles
     

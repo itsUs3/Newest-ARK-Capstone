@@ -3,12 +3,14 @@ import { motion } from 'framer-motion'
 import { FiSearch, FiFilter, FiMapPin, FiHome, FiSquare } from 'react-icons/fi'
 import { MdCheckCircle, MdWarning } from 'react-icons/md'
 import { useNavigate } from 'react-router-dom'
-import axios from 'axios'
 import toast from 'react-hot-toast'
+import { searchListings } from '../utils/api'
 
 export default function Search() {
   const navigate = useNavigate()
   const [listings, setListings] = useState([])
+  const [mapData, setMapData] = useState(null)
+  const [selectedMapListing, setSelectedMapListing] = useState(null)
   const [loading, setLoading] = useState(false)
   const [filters, setFilters] = useState({
     location: '',
@@ -26,17 +28,20 @@ export default function Search() {
   const fetchListings = async (appliedFilters = filters) => {
     setLoading(true)
     try {
-      const response = await axios.post('/api/recommendations', {
-        location: appliedFilters.location || 'all',
+      const response = await searchListings({
+        location: appliedFilters.location || '',
         bhk: appliedFilters.bhk === 'all' ? null : parseInt(appliedFilters.bhk),
         budget_min: appliedFilters.minPrice,
         budget_max: appliedFilters.maxPrice,
         amenities: []
       })
       setListings(response.data.listings)
+      setMapData(response.data.map || null)
+      setSelectedMapListing(null)
       toast.success(`Found ${response.data.listings.length} properties!`)
     } catch (error) {
-      toast.error('Failed to fetch listings')
+      const message = error?.response?.data?.detail || 'Failed to fetch listings. Make sure the backend is running on port 8000.'
+      toast.error(message)
       console.error(error)
     } finally {
       setLoading(false)
@@ -51,6 +56,41 @@ export default function Search() {
     if (price >= 10000000) return `₹${(price / 10000000).toFixed(1)} Cr`
     return `₹${(price / 100000).toFixed(0)} L`
   }
+
+  const getVerifiedImage = (images = []) => {
+    const blocked = ['logo', 'icon', 'svg', 'sprite', 'placeholder', 'fallback', 'nophotos', 'banner']
+    return (images || []).find((img) => {
+      if (typeof img !== 'string') return false
+      const value = img.trim().toLowerCase()
+      return value.startsWith('http') && !blocked.some((token) => value.includes(token))
+    })
+  }
+
+  const handleOpenProperty = (property) => {
+    try {
+      sessionStorage.setItem('mynivas:lastProperty', JSON.stringify(property))
+    } catch (error) {
+      console.warn('Unable to persist selected property:', error)
+    }
+    navigate(`/property/${encodeURIComponent(String(property.id || property.name || 'property'))}`, {
+      state: { property },
+    })
+  }
+
+  const mapCenter = mapData?.center
+  const mapListings = listings.filter((item) => item?.latitude != null && item?.longitude != null)
+  const activeMapCenter = selectedMapListing
+    ? {
+        latitude: selectedMapListing.latitude,
+        longitude: selectedMapListing.longitude,
+        label: selectedMapListing.title,
+        source: selectedMapListing.source,
+      }
+    : mapCenter
+
+  const mapEmbedUrl = activeMapCenter?.latitude && activeMapCenter?.longitude
+    ? `https://www.google.com/maps?q=${activeMapCenter.latitude},${activeMapCenter.longitude}&z=13&output=embed`
+    : null
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-800 py-12">
@@ -138,6 +178,67 @@ export default function Search() {
           </div>
         </motion.div>
 
+        {/* Map Panel */}
+        {mapCenter && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass-effect p-6 rounded-2xl mb-8"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <FiMapPin className="text-indigo-400" />
+                Search Map
+              </h2>
+              <span className="text-xs text-slate-400">
+                Center: {activeMapCenter?.label || 'Search area'} • Source: {activeMapCenter?.source || 'mixed'}
+              </span>
+            </div>
+            {mapEmbedUrl ? (
+              <>
+                <iframe
+                  title="Property Search Map"
+                  src={mapEmbedUrl}
+                  className="w-full h-80 rounded-xl border border-slate-700"
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+                {mapListings.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-xs text-slate-400 mb-2">Click a listing to focus map:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {mapListings.slice(0, 12).map((item) => {
+                        const isSelected = selectedMapListing?.id === item.id
+                        return (
+                          <button
+                            key={`map_${item.id}`}
+                            onClick={() => setSelectedMapListing(item)}
+                            className={`text-xs px-3 py-1.5 rounded-full border transition ${
+                              isSelected
+                                ? 'bg-indigo-500/40 text-indigo-100 border-indigo-300/70'
+                                : 'bg-slate-700/40 text-slate-200 border-slate-600 hover:bg-slate-700/70'
+                            }`}
+                          >
+                            {item.title}
+                          </button>
+                        )
+                      })}
+                      <button
+                        onClick={() => setSelectedMapListing(null)}
+                        className="text-xs px-3 py-1.5 rounded-full border bg-slate-800/60 text-slate-300 border-slate-600 hover:bg-slate-700/70"
+                      >
+                        Reset Center
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-slate-400 text-sm">Map center unavailable for this search.</div>
+            )}
+          </motion.div>
+        )}
+
         {/* Listings Grid */}
         {loading ? (
           <div className="text-center py-12">
@@ -163,15 +264,18 @@ export default function Search() {
               >
                 {/* Image */}
                 <div className="relative h-40 bg-gradient-to-br from-indigo-500 to-pink-500 overflow-hidden">
-                  {property.images && property.images[0] ? (
+                  {(() => {
+                    const verifiedImage = getVerifiedImage(property.images)
+                    return verifiedImage ? (
                     <img
-                      src={property.images[0]}
+                      src={verifiedImage}
                       alt={property.title}
                       className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
                     />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-5xl">🏢</div>
-                  )}
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-5xl">🏢</div>
+                    )
+                  })()}
 
                   {/* Trust Badge */}
                   <div className="absolute top-4 right-4">
@@ -190,6 +294,11 @@ export default function Search() {
 
                 {/* Content */}
                 <div className="p-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] uppercase tracking-wide px-2 py-1 rounded bg-slate-700/60 text-slate-200">
+                      {(property.source || 'dataset').toUpperCase()}
+                    </span>
+                  </div>
                   <h3 className="text-xl font-bold text-white mb-2 line-clamp-2">{property.title}</h3>
 
                   <div className="space-y-3 mb-4 text-slate-300 text-sm">
@@ -229,9 +338,28 @@ export default function Search() {
                       </div>
                     )}
 
+                    {(property.latitude && property.longitude) && (
+                      <div className="flex items-center gap-3 mb-4">
+                        <button
+                          onClick={() => setSelectedMapListing(property)}
+                          className="inline-flex text-xs text-indigo-300 hover:text-indigo-200"
+                        >
+                          Focus on map
+                        </button>
+                        <a
+                          href={`https://www.google.com/maps?q=${property.latitude},${property.longitude}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex text-xs text-indigo-300 hover:text-indigo-200"
+                        >
+                          Open in Google Maps
+                        </a>
+                      </div>
+                    )}
+
                     <button
                       className="btn-primary w-full text-sm"
-                      onClick={() => navigate(`/property/${property.id || 'demo'}`)}
+                      onClick={() => handleOpenProperty(property)}
                     >
                       View Details →
                     </button>

@@ -2,7 +2,7 @@ import logging
 import os
 import pickle
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -26,6 +26,53 @@ class PricePredictor:
     Visual: 1280-d normalized EfficientNetB0 embedding
     """
 
+    # City-level benchmark ₹/sqft bands (2025-26 metro trend references from major
+    # Indian real estate portals and market roundups). Used as realism guardrails.
+    CITY_PRICE_BENCHMARKS: Dict[str, Dict[str, float]] = {
+        "Mumbai": {"low_ppsf": 18000.0, "base_ppsf": 23000.0, "high_ppsf": 42000.0},
+        "Bangalore": {"low_ppsf": 8500.0, "base_ppsf": 11500.0, "high_ppsf": 21000.0},
+        "Delhi": {"low_ppsf": 10000.0, "base_ppsf": 13000.0, "high_ppsf": 24000.0},
+        "Pune": {"low_ppsf": 7000.0, "base_ppsf": 9500.0, "high_ppsf": 17000.0},
+        "Hyderabad": {"low_ppsf": 7500.0, "base_ppsf": 9800.0, "high_ppsf": 18000.0},
+        "Chennai": {"low_ppsf": 6500.0, "base_ppsf": 9000.0, "high_ppsf": 16000.0},
+        "Kolkata": {"low_ppsf": 5500.0, "base_ppsf": 7600.0, "high_ppsf": 14000.0},
+        "Ahmedabad": {"low_ppsf": 5200.0, "base_ppsf": 7600.0, "high_ppsf": 13500.0},
+        "Gurgaon": {"low_ppsf": 11000.0, "base_ppsf": 14500.0, "high_ppsf": 28000.0},
+        "Noida": {"low_ppsf": 8000.0, "base_ppsf": 10500.0, "high_ppsf": 19000.0},
+    }
+
+    CITY_SOURCE_URLS: Dict[str, List[str]] = {
+        "Mumbai": [
+            "https://www.99acres.com/property-rates-and-price-trends-in-mumbai-prffid",
+            "https://www.magicbricks.com/Property-Rates-Prices-Mumbai",
+        ],
+        "Bangalore": [
+            "https://www.99acres.com/property-rates-and-price-trends-in-bangalore-prffid",
+            "https://www.magicbricks.com/Property-Rates-Prices-Bangalore",
+        ],
+        "Delhi": [
+            "https://www.99acres.com/property-rates-and-price-trends-in-delhi-prffid",
+            "https://www.magicbricks.com/Property-Rates-Prices-Delhi",
+        ],
+        "Pune": [
+            "https://www.99acres.com/property-rates-and-price-trends-in-pune-prffid",
+            "https://www.magicbricks.com/Property-Rates-Prices-Pune",
+        ],
+        "Hyderabad": [
+            "https://www.99acres.com/property-rates-and-price-trends-in-hyderabad-prffid",
+            "https://www.magicbricks.com/Property-Rates-Prices-Hyderabad",
+        ],
+    }
+
+    # Explicit configuration multipliers for baseline + guardrail scaling.
+    BHK_CONFIGURATION_MULTIPLIERS: Dict[int, float] = {
+        1: 0.97,
+        2: 1.00,
+        3: 1.03,
+        4: 1.06,
+        5: 1.09,
+    }
+
     def __init__(self):
         self.model = None
         self.scaler = StandardScaler()
@@ -48,10 +95,13 @@ class PricePredictor:
             f"img_emb_{idx}" for idx in range(self.image_embedding_dim)
         ]
 
-        self.model_path = "models/price_predictor_smart.pkl"
+        self.model_path = str(Path(__file__).resolve().with_name("price_predictor_smart.pkl"))
         self.dataset_path = Path(__file__).parent.parent.parent / "Synthetic dataset.csv"
         self.image_dir = Path(__file__).parent.parent.parent / "data" / "housing1_images"
         self.image_lookup = self._build_image_lookup()
+        self.online_benchmark_enabled = os.getenv("PRICE_BENCHMARK_ONLINE", "1") != "0"
+        self.benchmark_cache_ttl_hours = int(os.getenv("PRICE_BENCHMARK_CACHE_HOURS", "24"))
+        self.benchmark_cache: Dict[str, Dict] = {}
 
         self.load_or_train_model()
 
@@ -183,7 +233,6 @@ class PricePredictor:
             self._calculate_location_multipliers(processed_data)
 
             # Save model
-            os.makedirs("models", exist_ok=True)
             with open(self.model_path, "wb") as f:
                 pickle.dump({
                     "model": self.model,
@@ -462,6 +511,13 @@ class PricePredictor:
                 city=city,
             )
 
+            predicted_price = self._apply_city_benchmark_guardrail(
+                predicted_price=predicted_price,
+                city=city,
+                bhk=bhk,
+                size=size,
+            )
+
             # Confidence-scaled interval: high confidence -> tighter band.
             price_range = self._build_realistic_price_range(
                 predicted_price=predicted_price,
@@ -475,6 +531,28 @@ class PricePredictor:
                 bhk, size, location, amenities, furnishing, status,
                 location_multiplier, market_adjustment
             )
+            benchmark = self._get_source_backed_city_benchmark(city)
+            if benchmark:
+                factors["market_benchmark_guardrail"] = {
+                    "impact": f"₹{int(benchmark['low_ppsf'])}-{int(benchmark['high_ppsf'])}/sq ft band",
+                    "description": f"Calibrated against current {city} benchmark range to avoid unrealistic under/over-pricing.",
+                }
+                factors["source_backed_benchmark"] = {
+                    "impact": f"source confidence {(benchmark.get('confidence_from_sources', 0.0) * 100):.0f}%",
+                    "description": (
+                        f"source_name: {benchmark.get('source_name', 'internal_city_baseline')}, "
+                        f"last_updated: {benchmark.get('last_updated', '')}, "
+                        f"online_samples: {benchmark.get('online_samples_count', 0)}"
+                    ),
+                }
+            factors["bhk_calibration"] = {
+                "impact": f"{bhk} BHK multiplier {self._get_bhk_configuration_multiplier(bhk):.2f}x",
+                "description": "Configuration-aware scaling is applied for 1, 2, 3, 4, 5+ BHK segments.",
+            }
+            factors["bhk_size_fit"] = {
+                "impact": f"size-fit {self._get_bhk_size_fit_multiplier(bhk, size):.2f}x",
+                "description": "Adjusts valuation if given size is too cramped or unusually large for the selected BHK.",
+            }
 
             factors["visual_condition_signal"] = {
                 "impact": "enabled" if image_path else "not provided",
@@ -531,30 +609,165 @@ class PricePredictor:
 
         return market_trends.get(city, 1.08)  # Default to 8% premium for tier-1 cities
 
-    def _get_city_baseline_price(self, city: str, bhk: int, size: float) -> float:
-        """Estimate a realistic baseline using city-level price-per-sqft benchmarks."""
-        city_ppsf = {
-            "Mumbai": 19000,
-            "Bangalore": 10500,
-            "Delhi": 12000,
-            "Pune": 9000,
-            "Hyderabad": 9500,
-            "Chennai": 8500,
-            "Kolkata": 7000,
-            "Ahmedabad": 7200,
-            "Gurgaon": 12500,
-            "Noida": 9800,
+    def _extract_ppsf_candidates(self, text: str) -> List[float]:
+        if not text:
+            return []
+
+        patterns = [
+            r"(?:₹|rs\.?|inr)\s*([\d,]{4,7})\s*(?:/|per)\s*(?:sq\.?\s*ft|sqft|square\s*feet)",
+            r"([\d,]{4,7})\s*(?:/|per)\s*(?:sq\.?\s*ft|sqft|square\s*feet)",
+        ]
+
+        candidates: List[float] = []
+        lowered = text.lower()
+        for pattern in patterns:
+            for raw in re.findall(pattern, lowered):
+                try:
+                    value = float(str(raw).replace(",", "").strip())
+                    if 2000 <= value <= 100000:
+                        candidates.append(value)
+                except Exception:
+                    continue
+        return candidates
+
+    def _fetch_online_ppsf_samples(self, city: str) -> List[float]:
+        if not self.online_benchmark_enabled:
+            return []
+
+        urls = self.CITY_SOURCE_URLS.get(city, [])
+        if not urls:
+            return []
+
+        import requests
+
+        samples: List[float] = []
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
 
-        ppsf = city_ppsf.get(city, 8000)
-        bhk_factor = 1.0 + max(0, bhk - 2) * 0.08
+        for url in urls:
+            try:
+                response = requests.get(url, headers=headers, timeout=2.0)
+                if response.status_code == 200:
+                    samples.extend(self._extract_ppsf_candidates(response.text))
+            except Exception:
+                continue
+
+        return samples
+
+    def _get_source_backed_city_benchmark(self, city: str) -> Dict[str, object]:
+        city_key = (city or "").strip() or "default"
+        now = datetime.now()
+
+        cached = self.benchmark_cache.get(city_key)
+        if cached and isinstance(cached, dict):
+            expires_at = cached.get("expires_at")
+            if isinstance(expires_at, datetime) and expires_at > now:
+                return cached["value"]
+
+        fallback = self.CITY_PRICE_BENCHMARKS.get(
+            city_key,
+            {"low_ppsf": 6500.0, "base_ppsf": 8500.0, "high_ppsf": 15000.0},
+        )
+
+        source_names = ["internal_city_baseline"]
+        baseline_samples = [
+            float(fallback["low_ppsf"]),
+            float(fallback["base_ppsf"]),
+            float(fallback["high_ppsf"]),
+        ]
+
+        online_samples = self._fetch_online_ppsf_samples(city_key)
+        if online_samples:
+            source_names.extend(["99acres", "magicbricks"])
+
+        combined = sorted(baseline_samples + online_samples)
+        low_idx = max(0, int(len(combined) * 0.2) - 1)
+        base_idx = max(0, int(len(combined) * 0.5) - 1)
+        high_idx = min(len(combined) - 1, max(base_idx + 1, int(len(combined) * 0.8)))
+
+        low_ppsf = float(combined[low_idx])
+        base_ppsf = float(combined[base_idx])
+        high_ppsf = float(combined[high_idx])
+
+        # Keep ordering stable even with sparse/noisy samples.
+        if not (low_ppsf < base_ppsf < high_ppsf):
+            low_ppsf = min(low_ppsf, base_ppsf * 0.92)
+            high_ppsf = max(high_ppsf, base_ppsf * 1.20)
+
+        confidence = 0.58
+        if online_samples:
+            confidence += 0.12
+        if len(online_samples) >= 3:
+            confidence += 0.08
+        if len(online_samples) >= 8:
+            confidence += 0.07
+        confidence = float(min(confidence, 0.90))
+
+        result = {
+            "low_ppsf": round(low_ppsf, 1),
+            "base_ppsf": round(base_ppsf, 1),
+            "high_ppsf": round(high_ppsf, 1),
+            "source_name": ", ".join(sorted(set(source_names))),
+            "last_updated": now.isoformat(),
+            "confidence_from_sources": round(confidence, 2),
+            "online_samples_count": len(online_samples),
+        }
+
+        self.benchmark_cache[city_key] = {
+            "expires_at": now + timedelta(hours=max(1, self.benchmark_cache_ttl_hours)),
+            "value": result,
+        }
+
+        return result
+
+    def _get_bhk_configuration_multiplier(self, bhk: int) -> float:
+        """Return explicit config multiplier so all BHKs are calibrated consistently."""
+        safe_bhk = max(1, int(bhk))
+        if safe_bhk in self.BHK_CONFIGURATION_MULTIPLIERS:
+            return float(self.BHK_CONFIGURATION_MULTIPLIERS[safe_bhk])
+        # Continue gradual increase for >5 BHK without exploding valuations.
+        return float(self.BHK_CONFIGURATION_MULTIPLIERS[5] + (safe_bhk - 5) * 0.03)
+
+    def _get_bhk_size_fit_multiplier(self, bhk: int, size: float) -> float:
+        """
+        Realism multiplier based on whether the given size is appropriate for the BHK.
+        Penalizes overly cramped configurations and gives a mild premium for roomy layouts.
+        """
+        bands = {
+            1: (450.0, 900.0),
+            2: (750.0, 1400.0),
+            3: (1100.0, 2000.0),
+            4: (1600.0, 3000.0),
+            5: (2200.0, 4200.0),
+        }
+        safe_bhk = max(1, int(bhk))
+        min_size, max_size = bands.get(safe_bhk, (2200.0 + (safe_bhk - 5) * 400.0, 4200.0 + (safe_bhk - 5) * 700.0))
+        safe_size = max(200.0, float(size))
+
+        if safe_size < min_size:
+            deficit = (min_size - safe_size) / max(min_size, 1.0)
+            return float(np.clip(1.0 - deficit * 0.35, 0.65, 1.0))
+
+        if safe_size > max_size:
+            surplus = (safe_size - max_size) / max(max_size, 1.0)
+            return float(np.clip(1.0 + surplus * 0.12, 1.0, 1.15))
+
+        return 1.0
+
+    def _get_city_baseline_price(self, city: str, bhk: int, size: float) -> float:
+        """Estimate a realistic baseline using city-level price-per-sqft benchmarks."""
+        benchmark = self._get_source_backed_city_benchmark(city)
+        ppsf = float(benchmark.get("base_ppsf", 8500.0))
+        bhk_factor = self._get_bhk_configuration_multiplier(bhk)
+        fit_factor = self._get_bhk_size_fit_multiplier(bhk, size)
         size_factor = 1.0
         if size < 600:
             size_factor = 1.06
         elif size > 1800:
             size_factor = 0.95
 
-        return float(max(500000, size * ppsf * bhk_factor * size_factor))
+        return float(max(500000, size * ppsf * bhk_factor * fit_factor * size_factor))
 
     def _get_city_volatility_profile(self, city: str) -> Dict[str, float]:
         """
@@ -564,12 +777,12 @@ class PricePredictor:
         """
         profiles: Dict[str, Dict[str, float]] = {
             "Mumbai": {
-                "model_weight": 0.78,
-                "baseline_weight": 0.22,
-                "floor_mult": 0.50,
+                "model_weight": 0.35,
+                "baseline_weight": 0.65,
+                "floor_mult": 0.80,
                 "ceil_mult": 1.95,
-                "min_spread": 0.10,
-                "max_spread": 0.22,
+                "min_spread": 0.08,
+                "max_spread": 0.18,
             },
             "Gurgaon": {
                 "model_weight": 0.77,
@@ -626,6 +839,33 @@ class PricePredictor:
         floor = city_baseline * float(profile["floor_mult"])
         ceil = city_baseline * float(profile["ceil_mult"])
         return float(np.clip(raw, floor, ceil))
+
+    def _apply_city_benchmark_guardrail(
+        self,
+        predicted_price: float,
+        city: str,
+        bhk: int,
+        size: float,
+    ) -> float:
+        """
+        Keep predictions within realistic city/bhk/size bounds derived from benchmark ppsf bands.
+        Prevents extreme under-pricing for premium configurations.
+        """
+        benchmark = self._get_source_backed_city_benchmark(city)
+
+        low_ppsf = float(benchmark["low_ppsf"])
+        high_ppsf = float(benchmark["high_ppsf"])
+
+        bhk_factor = self._get_bhk_configuration_multiplier(bhk)
+        fit_factor = self._get_bhk_size_fit_multiplier(bhk, size)
+
+        floor_price = size * low_ppsf * bhk_factor * fit_factor
+        ceil_price = size * high_ppsf * bhk_factor * min(1.12, fit_factor * 1.15)
+
+        if floor_price > ceil_price:
+            ceil_price = floor_price * 1.12
+
+        return float(np.clip(predicted_price, floor_price, ceil_price))
 
     def _build_realistic_price_range(
         self,
@@ -823,4 +1063,3 @@ class PricePredictor:
         if os.path.exists(self.model_path):
             os.remove(self.model_path)
         self.train_model()
-

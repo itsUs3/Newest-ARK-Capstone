@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { FiAlertTriangle, FiCheck } from 'react-icons/fi'
 import { MdWarning, MdCheckCircle } from 'react-icons/md'
-import axios from 'axios'
 import toast from 'react-hot-toast'
+import { detectFraud as detectFraudRequest } from '../utils/api'
 
 export default function FraudDetector() {
   const [formData, setFormData] = useState({
@@ -23,7 +23,7 @@ export default function FraudDetector() {
 
     setLoading(true)
     try {
-      const response = await axios.post('/api/fraud/detect', {
+      const response = await detectFraudRequest({
         property_id: formData.propertyId || `prop_${Date.now()}`,
         title: formData.title,
         description: formData.description

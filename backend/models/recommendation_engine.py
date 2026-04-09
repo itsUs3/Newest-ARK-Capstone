@@ -3,6 +3,7 @@ import pandas as pd
 from typing import Dict, List
 from difflib import SequenceMatcher
 from config import DATA_PATH
+from pathlib import Path
 
 class RecommendationEngine:
     """
@@ -16,7 +17,18 @@ class RecommendationEngine:
     def _load_sample_listings(self) -> List[Dict]:
         """Load sample listings from Housing1.csv"""
         try:
-            df = pd.read_csv(DATA_PATH)
+            frames = []
+            if Path(DATA_PATH).exists():
+                frames.append(pd.read_csv(DATA_PATH))
+
+            firecrawl_csv = Path(DATA_PATH).parent / "Datasets" / "firecrawl_mumbai_housing1.csv"
+            if firecrawl_csv.exists():
+                frames.append(pd.read_csv(firecrawl_csv))
+
+            if not frames:
+                return self._get_default_listings()
+
+            df = pd.concat(frames, ignore_index=True)
             listings = []
             
             for idx, row in df.iterrows():
@@ -24,6 +36,31 @@ class RecommendationEngine:
                 title = row.get('title2', 'Unknown Property')
                 location = str(title).split('in ')[-1] if 'in' in str(title) else 'Mumbai'
                 bhk = self._extract_bhk(str(title))
+                if pd.notna(row.get('bhk')):
+                    try:
+                        bhk = int(row.get('bhk'))
+                    except Exception:
+                        pass
+
+                size_val = np.random.uniform(400, 2500)
+                if pd.notna(row.get('size_sqft')):
+                    try:
+                        size_val = float(row.get('size_sqft'))
+                    except Exception:
+                        pass
+
+                price_val = np.random.uniform(30, 500) * 100000
+                if pd.notna(row.get('price_numeric')):
+                    try:
+                        price_val = float(row.get('price_numeric'))
+                    except Exception:
+                        pass
+
+                amenity_text = str(row.get('amenities', ''))
+                parsed_amenities = [a.strip().lower() for a in amenity_text.split(',') if a.strip() and a.strip().lower() != 'nan']
+
+                raw_images = [row.get('image'), row.get('image2'), row.get('image3')]
+                cleaned_images = self._normalize_images(raw_images, title, location, idx)
                 
                 listing = {
                     'id': f"property_{idx}",
@@ -31,11 +68,12 @@ class RecommendationEngine:
                     'description': title,
                     'location': location,
                     'bhk': bhk,
-                    'size': np.random.uniform(400, 2500),
-                    'price': np.random.uniform(30, 500) * 100000,  # 30L to 500L
+                    'size': size_val,
+                    'price': price_val,
                     'seller': row.get('name', 'Developer'),
-                    'amenities': self._extract_amenities(str(title)),
-                    'images': [url for url in [row.get('image'), row.get('image2'), row.get('image3')] if pd.notna(url)],
+                    'source': 'firecrawl' if str(row.get('name', '')).strip().lower() == 'firecrawl' else 'dataset',
+                    'amenities': parsed_amenities or self._extract_amenities(str(title)),
+                    'images': cleaned_images,
                     'rating': np.random.uniform(3.5, 5.0),
                     'views': np.random.randint(100, 5000),
                     'posted_date': '2026-02-03'
@@ -77,6 +115,35 @@ class RecommendationEngine:
                 amenities.append(amenity)
         
         return amenities if amenities else ['basic']
+
+    def _normalize_images(self, images: List, title: str, location: str, seed: int) -> List[str]:
+        blocked = (
+            'logo', 'icon', 'svg', 'sprite', 'featuredagent', 'fallback', 'nophotos', 'placeholder',
+            'badge', 'banner', 'logo.', 'logo-', 'thumbicon'
+        )
+        cleaned = []
+        for image in images:
+            if not isinstance(image, str):
+                continue
+            image = image.strip()
+            if not image or image.lower() == 'nan':
+                continue
+            lower = image.lower()
+            if any(token in lower for token in blocked):
+                continue
+            if not lower.startswith('http'):
+                continue
+            cleaned.append(image)
+
+        # Keep only verified unique images. Do not invent placeholders.
+        deduped = []
+        seen = set()
+        for image in cleaned:
+            if image in seen:
+                continue
+            seen.add(image)
+            deduped.append(image)
+        return deduped
     
     def _get_default_listings(self) -> List[Dict]:
         """Return default listings if data loading fails"""
@@ -129,6 +196,12 @@ class RecommendationEngine:
         scored_listings = []
         
         for listing in self.listings:
+            listing_price = float(listing.get('price', 0) or 0)
+
+            # Strict budget filtering for search expectations
+            if listing_price < budget_min or listing_price > budget_max:
+                continue
+
             # Strict location filtering for search expectations
             if location_query and location_query != 'all':
                 if location_query not in str(listing['location']).lower():
@@ -147,34 +220,28 @@ class RecommendationEngine:
             reasons = []
             
             # Budget match (40% weight)
-            if budget_min <= listing['price'] <= budget_max:
-                budget_match = 100
-                reasons.append("Within budget")
-            else:
-                distance = min(
-                    abs(listing['price'] - budget_min) if listing['price'] < budget_min else 0,
-                    abs(listing['price'] - budget_max) if listing['price'] > budget_max else 0
-                )
-                budget_match = max(0, 100 - (distance / max(budget_max, 1000000)) * 50)
-                reasons.append(f"Price slightly {'above' if listing['price'] > budget_max else 'below'} budget")
-            
+            budget_match = 100
+            reasons.append("Within budget")
             score += budget_match * 0.4
             
             # Location match (25% weight)
-            if location_query and location_query in listing['location'].lower():
+            if location_query and location_query != 'all' and location_query in listing['location'].lower():
                 score += 100 * 0.25
                 reasons.append("Exact location match")
             else:
-                score += 40 * 0.25  # Partial credit
+                score += 50 * 0.25
             
             # BHK match (20% weight)
-            if listing['bhk'] == bhk:
-                score += 100 * 0.2
-                reasons.append(f"{bhk} BHK as requested")
-            elif abs(listing['bhk'] - bhk) == 1:
-                score += 70 * 0.2
+            if enforce_bhk:
+                if listing['bhk'] == enforce_bhk:
+                    score += 100 * 0.2
+                    reasons.append(f"{enforce_bhk} BHK as requested")
+                elif abs(listing['bhk'] - enforce_bhk) == 1:
+                    score += 70 * 0.2
+                else:
+                    score += 30 * 0.2
             else:
-                score += 30 * 0.2
+                score += 50 * 0.2
             
             # Amenities match (15% weight)
             if amenities:
@@ -196,6 +263,16 @@ class RecommendationEngine:
         
         # Sort by match score descending
         scored_listings.sort(key=lambda x: x['match_score'], reverse=True)
+
+        # Keep Search results representative when Firecrawl Mumbai dataset is available.
+        if location_query == 'mumbai':
+            top_window = scored_listings[:15]
+            firecrawl_in_top = [x for x in top_window if x.get('source') == 'firecrawl']
+            if not firecrawl_in_top:
+                firecrawl_pool = [x for x in scored_listings if x.get('source') == 'firecrawl'][:5]
+                if firecrawl_pool:
+                    non_firecrawl = [x for x in scored_listings if x.get('source') != 'firecrawl']
+                    scored_listings = firecrawl_pool + non_firecrawl
         
         return scored_listings
     

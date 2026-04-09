@@ -1,0 +1,355 @@
+[
+  {
+    "id": "post_1",
+    "text": "Bandra rent hike\n\nRent in Bandra has increased by 40% in the last year. Looking to move to Andheri or Powai for savings.",
+    "subreddit": "mumbai",
+    "timestamp": "2025-05-03T00:00:43.851602",
+    "location_tags": [
+      "Bandra West Mumbai",
+      "Andheri West Mumbai",
+      "Powai Mumbai"
+    ],
+    "upvotes": 481,
+    "url": "https://reddit.com/r/mumbai/comments/1",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_2",
+    "text": "Andheri vs Bandra\n\nThinking of Andheri - it's quiet, close to office, good schools. Bandra is too crowded and expensive now.",
+    "subreddit": "mumbai",
+    "timestamp": "2025-08-05T00:00:43.851714",
+    "location_tags": [
+      "Bandra West Mumbai",
+      "Andheri West Mumbai",
+      "Powai Mumbai"
+    ],
+    "upvotes": 310,
+    "url": "https://reddit.com/r/mumbai/comments/2",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_3",
+    "text": "Powai infrastructure\n\nPowai is developing rapidly. New metro station coming. Good for future investment.",
+    "subreddit": "mumbai",
+    "timestamp": "2025-08-28T00:00:43.851735",
+    "location_tags": [
+      "Bandra West Mumbai",
+      "Andheri West Mumbai",
+      "Powai Mumbai"
+    ],
+    "upvotes": 332,
+    "url": "https://reddit.com/r/mumbai/comments/3",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_4",
+    "text": "Borivali safety concerns\n\nAnyone live in Borivali? How's the safety situation? Considering moving there for affordability.",
+    "subreddit": "mumbai",
+    "timestamp": "2026-02-07T00:00:43.851745",
+    "location_tags": [
+      "Bandra West Mumbai",
+      "Andheri West Mumbai",
+      "Powai Mumbai"
+    ],
+    "upvotes": 406,
+    "url": "https://reddit.com/r/mumbai/comments/4",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_5",
+    "text": "Worli luxury living\n\nWorli is premium but offers great waterfront properties and lifestyle. Best if budget allows.",
+    "subreddit": "mumbai",
+    "timestamp": "2025-12-07T00:00:43.851754",
+    "location_tags": [
+      "Bandra West Mumbai",
+      "Andheri West Mumbai",
+      "Powai Mumbai"
+    ],
+    "upvotes": 234,
+    "url": "https://reddit.com/r/mumbai/comments/5",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_6",
+    "text": "Chembur underrated area\n\nChembur doesn't get enough attention. Good connectivity, less crowded than Bandra, cleaner.",
+    "subreddit": "mumbai",
+    "timestamp": "2025-09-19T00:00:43.851763",
+    "location_tags": [
+      "Bandra West Mumbai",
+      "Andheri West Mumbai",
+      "Powai Mumbai"
+    ],
+    "upvotes": 112,
+    "url": "https://reddit.com/r/mumbai/comments/6",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_7",
+    "text": "Gurugram traffic nightmare\n\nGurugram is drowning in traffic. Commute times are unbearable even for short distances.",
+    "subreddit": "delhi",
+    "timestamp": "2026-02-21T00:00:43.851773",
+    "location_tags": [
+      "Gurugram",
+      "Noida"
+    ],
+    "upvotes": 425,
+    "url": "https://reddit.com/r/delhi/comments/7",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_8",
+    "text": "Noida affordable option\n\nNoida prices are reasonable but pollution levels are concerning according to AQI reports.",
+    "subreddit": "delhi",
+    "timestamp": "2025-07-01T00:00:43.851781",
+    "location_tags": [
+      "Gurugram",
+      "Noida"
+    ],
+    "upvotes": 243,
+    "url": "https://reddit.com/r/delhi/comments/8",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_9",
+    "text": "Delhi pricing\n\nProperty prices in Delhi are skyrocketing. Everyone recommending satellite cities like Gurugram.",
+    "subreddit": "delhi",
+    "timestamp": "2025-05-11T00:00:43.851790",
+    "location_tags": [
+      "Gurugram",
+      "Noida"
+    ],
+    "upvotes": 390,
+    "url": "https://reddit.com/r/delhi/comments/9",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_10",
+    "text": "Whitefield tech hub\n\nWhitefield is the IT hub. Great for tech professionals. Good cafes and nightlife.",
+    "subreddit": "bangalore",
+    "timestamp": "2025-06-21T00:00:43.851797",
+    "location_tags": [
+      "Whitefield Bengaluru",
+      "Koramangala Bengaluru"
+    ],
+    "upvotes": 364,
+    "url": "https://reddit.com/r/bangalore/comments/10",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_11",
+    "text": "Koramangala expensive\n\nKoramangala is the coolest area but prices reflect that. Premium for lifestyle and connectivity.",
+    "subreddit": "bangalore",
+    "timestamp": "2025-09-16T00:00:43.851805",
+    "location_tags": [
+      "Whitefield Bengaluru",
+      "Koramangala Bengaluru"
+    ],
+    "upvotes": 32,
+    "url": "https://reddit.com/r/bangalore/comments/11",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_12",
+    "text": "Bangalore weather\n\nBangalore's weather is excellent year-round, making it ideal for living. Unlike Delhi's extremes.",
+    "subreddit": "bangalore",
+    "timestamp": "2025-09-15T00:00:43.851812",
+    "location_tags": [
+      "Whitefield Bengaluru",
+      "Koramangala Bengaluru"
+    ],
+    "upvotes": 245,
+    "url": "https://reddit.com/r/bangalore/comments/12",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_13",
+    "text": "Electronics City commute\n\nElectronics City traffic is terrible during peak hours. Need good time management.",
+    "subreddit": "bangalore",
+    "timestamp": "2025-05-26T00:00:43.851820",
+    "location_tags": [
+      "Whitefield Bengaluru",
+      "Koramangala Bengaluru"
+    ],
+    "upvotes": 480,
+    "url": "https://reddit.com/r/bangalore/comments/13",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_14",
+    "text": "Gachibowli growing\n\nGachibowli is booming with tech companies. Infrastructure and amenities are improving.",
+    "subreddit": "hyderabad",
+    "timestamp": "2026-03-14T00:00:43.851828",
+    "location_tags": [
+      "Gachibowli Hyderabad",
+      "Hitech City Hyderabad"
+    ],
+    "upvotes": 235,
+    "url": "https://reddit.com/r/hyderabad/comments/14",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_15",
+    "text": "Hitech City lifestyle\n\nHitech City offers modern living with good restaurants, shopping, and connectivity.",
+    "subreddit": "hyderabad",
+    "timestamp": "2025-11-15T00:00:43.851834",
+    "location_tags": [
+      "Gachibowli Hyderabad",
+      "Hitech City Hyderabad"
+    ],
+    "upvotes": 326,
+    "url": "https://reddit.com/r/hyderabad/comments/15",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_16",
+    "text": "Kondapur budget option\n\nKondapur is affordable compared to other IT hubs. Good emerging area.",
+    "subreddit": "hyderabad",
+    "timestamp": "2025-06-21T00:00:43.851845",
+    "location_tags": [
+      "Gachibowli Hyderabad",
+      "Hitech City Hyderabad"
+    ],
+    "upvotes": 286,
+    "url": "https://reddit.com/r/hyderabad/comments/16",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_17",
+    "text": "Hyderabad affordability\n\nHyderabad offers best value for money among major Indian cities. High living standards at lower cost.",
+    "subreddit": "hyderabad",
+    "timestamp": "2025-04-08T00:00:43.851853",
+    "location_tags": [
+      "Gachibowli Hyderabad",
+      "Hitech City Hyderabad"
+    ],
+    "upvotes": 347,
+    "url": "https://reddit.com/r/hyderabad/comments/17",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_18",
+    "text": "Hinjawadi IT corridor\n\nHinjawadi is the IT hub of Pune. Good for professionals, but traffic during rush hours.",
+    "subreddit": "pune",
+    "timestamp": "2025-12-21T00:00:43.851861",
+    "location_tags": [
+      "Hinjawadi Pune",
+      "Kharadi Pune"
+    ],
+    "upvotes": 156,
+    "url": "https://reddit.com/r/pune/comments/18",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_19",
+    "text": "Kharadi residential\n\nKharadi is more residential and peaceful. Good for families than Hinjawadi.",
+    "subreddit": "pune",
+    "timestamp": "2025-08-27T00:00:43.852295",
+    "location_tags": [
+      "Hinjawadi Pune",
+      "Kharadi Pune"
+    ],
+    "upvotes": 193,
+    "url": "https://reddit.com/r/pune/comments/19",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_20",
+    "text": "Wakad development\n\nWakad is developing rapidly. New malls and restaurants are opening monthly.",
+    "subreddit": "pune",
+    "timestamp": "2025-11-04T00:00:43.852364",
+    "location_tags": [
+      "Hinjawadi Pune",
+      "Kharadi Pune"
+    ],
+    "upvotes": 180,
+    "url": "https://reddit.com/r/pune/comments/20",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_21",
+    "text": "Viman Nagar lifestyle\n\nViman Nagar offers a good balance of affordability and lifestyle. Underrated gem.",
+    "subreddit": "pune",
+    "timestamp": "2025-08-19T00:00:43.852377",
+    "location_tags": [
+      "Hinjawadi Pune",
+      "Kharadi Pune"
+    ],
+    "upvotes": 312,
+    "url": "https://reddit.com/r/pune/comments/21",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_22",
+    "text": "DLF Phase 2 premium\n\nDLF Phase 2 is one of the priciest areas in Gurugram but offers excellent security and amenities.",
+    "subreddit": "gurgaon",
+    "timestamp": "2026-01-29T00:00:43.852388",
+    "location_tags": [
+      "DLF Phase 2 Gurugram",
+      "Gurugram"
+    ],
+    "upvotes": 382,
+    "url": "https://reddit.com/r/gurgaon/comments/22",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_23",
+    "text": "Gurugram expansion\n\nGurugram is expanding rapidly. New sectors developing but traffic remains a concern.",
+    "subreddit": "gurgaon",
+    "timestamp": "2025-06-24T00:00:43.852397",
+    "location_tags": [
+      "DLF Phase 2 Gurugram",
+      "Gurugram"
+    ],
+    "upvotes": 428,
+    "url": "https://reddit.com/r/gurgaon/comments/23",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_24",
+    "text": "Sector 137 value\n\nSector 137 offers good value for money with improving infrastructure.",
+    "subreddit": "noida",
+    "timestamp": "2026-03-02T00:00:43.852404",
+    "location_tags": [
+      "Sector 137 Noida"
+    ],
+    "upvotes": 331,
+    "url": "https://reddit.com/r/noida/comments/24",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_25",
+    "text": "Noida pollution\n\nPollution is a major concern in Noida. Air quality often goes into the 'hazardous' category.",
+    "subreddit": "noida",
+    "timestamp": "2026-02-03T00:00:43.852412",
+    "location_tags": [
+      "Sector 137 Noida"
+    ],
+    "upvotes": 38,
+    "url": "https://reddit.com/r/noida/comments/25",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_26",
+    "text": "Metro expansion impact\n\nMetro expansion across Indian cities is changing property valuations positively.",
+    "subreddit": "india",
+    "timestamp": "2026-03-14T00:00:43.852420",
+    "location_tags": [
+      "Bandra West Mumbai"
+    ],
+    "upvotes": 116,
+    "url": "https://reddit.com/r/india/comments/26",
+    "source_type": "generated_sample"
+  },
+  {
+    "id": "post_27",
+    "text": "NRI housing demand\n\nNRIs showing increased interest in tier-2 cities for property investment.",
+    "subreddit": "india",
+    "timestamp": "2025-12-21T00:00:43.852427",
+    "location_tags": [
+      "Bandra West Mumbai"
+    ],
+    "upvotes": 475,
+    "url": "https://reddit.com/r/india/comments/27",
+    "source_type": "generated_sample"
+  }
+]

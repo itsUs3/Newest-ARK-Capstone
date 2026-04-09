@@ -310,7 +310,7 @@ export default function VastuChecker() {
             <div className="mt-4 flex items-start gap-2 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
               <FiInfo className="text-blue-400 mt-0.5 flex-shrink-0" />
               <p className="text-sm text-blue-200">
-                Using simulated surroundings data. Add SERPAPI_KEY to .env for real-time Google Maps analysis.
+                Using simulated surroundings data. Configure live maps access in the backend to enable real-time Google Maps analysis.
               </p>
             </div>
           )}

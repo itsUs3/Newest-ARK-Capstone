@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { FiAlertTriangle, FiCheck, FiDownload, FiFileText, FiBook } from 'react-icons/fi'
 import { MdWarning, MdCheckCircle } from 'react-icons/md'
-import axios from 'axios'
 import toast from 'react-hot-toast'
+import { analyzeContract as analyzeContractRequest } from '../utils/api'
 
 export default function ContractAnalyzer() {
   const [contractText, setContractText] = useState('')
@@ -40,7 +40,7 @@ export default function ContractAnalyzer() {
 
     setLoading(true)
     try {
-      const response = await axios.post('/api/genai/contract-analyze', {
+      const response = await analyzeContractRequest({
         contract_text: contractText,
         contract_type: contractType
       })

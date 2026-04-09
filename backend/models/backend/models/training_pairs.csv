@@ -1,0 +1,31 @@
+sentence1,sentence2,similarity,category
+2bhk,2-bedroom apartment,0.9,synonyms
+2bhk,2 bedroom flat,0.9,synonyms
+3bhk,3-bedroom apartment,0.9,synonyms
+gym,fitness center,0.9,synonyms
+gym,exercise facility,0.9,synonyms
+pool,swimming pool,0.9,synonyms
+parking,parking space,0.9,synonyms
+parking,garage,0.9,synonyms
+unfurnished,bare shell,0.9,synonyms
+unfurnished,empty property,0.9,synonyms
+furnished,interior included,0.9,synonyms
+ready to move,possession available,0.9,synonyms
+under construction,under development,0.9,synonyms
+metro connectivity,public transport,0.9,synonyms
+metro connectivity,railway station nearby,0.9,synonyms
+highway access,road connectivity,0.9,synonyms
+affordable housing,budget property,0.9,synonyms
+luxury property,premium apartment,0.9,synonyms
+rera registered,government approved,0.9,synonyms
+metro line opens soon,new connectivity launching,0.88,market_positive
+infrastructure development,new projects coming,0.88,market_positive
+price appreciation expected,growth predicted,0.88,market_positive
+mumbai property,mumbai apartment,0.92,location_associations
+andheri west,andheri locality,0.92,location_associations
+bangalore property,bangalore apartment,0.92,location_associations
+pune real estate,pune housing,0.92,location_associations
+delhi property,delhi apartment,0.92,location_associations
+urgent limited time offer,standard property listing,0.15,fraud_detection
+cash only no questions asked,transparent transaction,0.15,fraud_detection
+below market price amazing deal,fair market value property,0.15,fraud_detection

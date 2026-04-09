@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { FiAlertCircle, FiExternalLink, FiLoader, FiTrendingUp } from 'react-icons/fi'
-import axios from 'axios'
 import toast from 'react-hot-toast'
 import ROIDashboard from '../components/ROIDashboard'
+import { getInvestmentForecast, getMarketAlerts, getMarketInsights } from '../utils/api'
 
 export default function InvestmentAnalyzer() {
   const [formData, setFormData] = useState({
@@ -42,10 +42,8 @@ export default function InvestmentAnalyzer() {
     setEvidenceLoading(true)
     try {
       const [insightsRes, alertsRes] = await Promise.all([
-        axios.get(`/api/genai/market-insights/${encodeURIComponent(location)}`),
-        axios.get(`/api/genai/market-alerts/${encodeURIComponent(location)}`, {
-          params: { n_results: 4 }
-        })
+        getMarketInsights(location),
+        getMarketAlerts(location, { n_results: 4 })
       ])
       setMarketInsights(insightsRes.data)
       setMarketAlerts(alertsRes.data)
@@ -96,7 +94,7 @@ export default function InvestmentAnalyzer() {
       }
 
       const [forecastRes] = await Promise.all([
-        axios.post('/api/genai/investment-forecast', payload),
+        getInvestmentForecast(payload),
         loadEvidence(formData.location)
       ])
 

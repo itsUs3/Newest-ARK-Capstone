@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { FiMenu, FiX, FiSearch, FiTrendingUp, FiShield, FiMessageCircle, FiMapPin, FiCheckSquare, FiLayout, FiDollarSign, FiChevronDown, FiFileText } from 'react-icons/fi'
+import { FiMenu, FiX, FiSearch, FiTrendingUp, FiShield, FiMessageCircle, FiMapPin, FiCheckSquare, FiDollarSign, FiChevronDown, FiFileText, FiUsers } from 'react-icons/fi'
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -10,6 +10,7 @@ export default function Navbar() {
   const navStructure = [
     { label: 'Search', path: '/search', icon: FiSearch },
     { label: 'Market News', path: '/market-news', icon: FiTrendingUp },
+    { label: 'Social', path: '/social', icon: FiUsers },
     {
       label: 'Analysis Tools',
       icon: FiDollarSign,
@@ -30,7 +31,6 @@ export default function Navbar() {
         { label: 'Vastu Checker', path: '/vastu-checker', icon: FiCheckSquare },
       ]
     },
-    { label: 'GNN Floor Plan', path: '/gnn-floorplan', icon: FiLayout },
   ]
 
   const handleDropdownToggle = (label) => {

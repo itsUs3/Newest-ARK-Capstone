@@ -4,7 +4,13 @@ from typing import Dict, List, Optional
 import os
 from datetime import datetime, timedelta
 import json
+import logging
+from pathlib import Path
 from config import DATA_PATH, RAG_PERSIST_DIR
+
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
+
+logger = logging.getLogger(__name__)
 
 try:
     from models.market_news_rag import MarketNewsRAG
@@ -14,10 +20,12 @@ except Exception:
 try:
     from sentence_transformers import SentenceTransformer
     import chromadb
+    from chromadb.config import Settings
     LANGCHAIN_AVAILABLE = True
 except Exception as e:
     LANGCHAIN_AVAILABLE = False
-    print(f"Warning: RAG dependencies unavailable ({e}). Falling back to rule-based mode.")
+    Settings = None
+    logger.warning(f"RAG dependencies unavailable ({e}). Falling back to rule-based mode.")
 
 
 class InvestmentAdvisor:
@@ -33,15 +41,16 @@ class InvestmentAdvisor:
         self.embedder = None
         self.chromadb_client = None
         self.market_news_rag = None
+        self.base_dir = Path(__file__).resolve().parents[2]
         
         # Initialize RAG components if available
         if LANGCHAIN_AVAILABLE:
             try:
-                self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
-                self.chromadb_client = chromadb.Client()
+                self.embedder = SentenceTransformer(self._resolve_embedding_model())
+                self.chromadb_client = chromadb.Client(settings=self._chroma_settings())
                 self._initialize_rag_index()
             except Exception as e:
-                print(f"RAG initialization warning: {e}")
+                logger.warning(f"RAG initialization warning: {e}")
         
         # Load market data
         self._load_market_data()
@@ -51,7 +60,22 @@ class InvestmentAdvisor:
             try:
                 self.market_news_rag = MarketNewsRAG(persist_directory=RAG_PERSIST_DIR)
             except Exception as e:
-                print(f"Market news signal unavailable: {e}")
+                logger.warning(f"Market news signal unavailable: {e}")
+
+    def _chroma_settings(self):
+        if Settings is None:
+            return None
+        return Settings(anonymized_telemetry=False)
+
+    def _resolve_embedding_model(self) -> str:
+        candidate_paths = [
+            self.base_dir / "backend" / "models" / "real_estate_embeddings",
+            self.base_dir / "backend" / "models" / "backend" / "models" / "real_estate_embeddings",
+        ]
+        for candidate in candidate_paths:
+            if candidate.exists():
+                return str(candidate)
+        return "all-MiniLM-L6-v2"
     
     def _initialize_rag_index(self):
         """Initialize ChromaDB vector store with property and market data"""
@@ -85,9 +109,9 @@ class InvestmentAdvisor:
             self._vectorize_market_insights()
             
             self.index_initialized = True
-            print("✅ RAG vector index initialized successfully")
+            logger.info("RAG vector index initialized successfully")
         except Exception as e:
-            print(f"RAG index initialization error: {e}")
+            logger.warning(f"RAG index initialization error: {e}")
     
     def _vectorize_property_data(self):
         """Vectorize property data and store in ChromaDB"""
@@ -100,7 +124,6 @@ class InvestmentAdvisor:
             docs = []
             metadatas = []
             ids = []
-            embeddings = []
             
             for idx, row in sample_df.iterrows():
                 # Create document text
@@ -118,10 +141,10 @@ class InvestmentAdvisor:
                     }
                     metadatas.append(metadata)
                     ids.append(f"prop_{idx}")
-                    
-                    # Generate embedding
-                    embedding = self.embedder.encode(full_doc).tolist()
-                    embeddings.append(embedding)
+            
+            embeddings = []
+            if docs:
+                embeddings = self.embedder.encode(docs, show_progress_bar=False).tolist()
             
             # Add to collection
             if docs:
@@ -131,9 +154,9 @@ class InvestmentAdvisor:
                     documents=docs,
                     metadatas=metadatas
                 )
-                print(f"✅ Vectorized {len(docs)} property records")
+                logger.info(f"Vectorized {len(docs)} property records")
         except Exception as e:
-            print(f"Error vectorizing properties: {e}")
+            logger.warning(f"Error vectorizing properties: {e}")
     
     def _vectorize_market_insights(self):
         """Create and vectorize market insights for RAG"""
@@ -181,14 +204,12 @@ class InvestmentAdvisor:
             docs = []
             metadatas = []
             ids = []
-            embeddings = []
             
             for idx, insight in enumerate(market_insights):
                 docs.append(insight['text'])
                 metadatas.append({k: str(v) for k, v in insight.items() if k != 'text'})
                 ids.append(f"market_{idx}")
-                embedding = self.embedder.encode(insight['text']).tolist()
-                embeddings.append(embedding)
+            embeddings = self.embedder.encode(docs, show_progress_bar=False).tolist()
             
             self.market_collection.add(
                 ids=ids,
@@ -196,9 +217,9 @@ class InvestmentAdvisor:
                 documents=docs,
                 metadatas=metadatas
             )
-            print(f"✅ Vectorized {len(docs)} market insights")
+            logger.info(f"Vectorized {len(docs)} market insights")
         except Exception as e:
-            print(f"Error vectorizing market insights: {e}")
+            logger.warning(f"Error vectorizing market insights: {e}")
     
     def _load_market_data(self):
         """Load market data for different locations"""
@@ -399,7 +420,7 @@ class InvestmentAdvisor:
                 'retrieval_method': 'semantic_search'
             }
         except Exception as e:
-            print(f"RAG retrieval error: {e}")
+            logger.warning(f"RAG retrieval error: {e}")
             return self._retrieve_market_context_fallback(location)
     
     def _retrieve_market_context_fallback(self, location: str = None) -> Dict:

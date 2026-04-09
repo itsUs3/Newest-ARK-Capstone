@@ -96,6 +96,7 @@ class AmenityMatcher:
         self.properties: List[Dict] = []
         self._vectorizer: Optional[TfidfVectorizer] = None
         self._property_matrix = None
+        self._cross_modal_available: Optional[bool] = None
         self._load_data()
         self._build_index()
 
@@ -268,8 +269,6 @@ class AmenityMatcher:
             Dict with: matches, montage (base64), search_type, lifestyle_optimized
         """
         try:
-            from .cross_modal_matcher import CrossModalMatcher
-            
             # Optimize query if lifestyle provided
             optimized_query = query
             lifestyle_matched = None
@@ -283,7 +282,11 @@ class AmenityMatcher:
             
             # Use cross-modal matcher
             if use_cross_modal:
+                if self._cross_modal_available is False:
+                    raise RuntimeError("Cross-modal matcher unavailable in current environment")
+                from .cross_modal_matcher import CrossModalMatcher
                 matcher = CrossModalMatcher()
+                self._cross_modal_available = True
                 results = matcher.search_text(optimized_query, top_k=top_k)
                 
                 return {
@@ -297,29 +300,40 @@ class AmenityMatcher:
                     "stats": results.get("stats", {}),
                     "integration_source": "cross_modal_matcher"
                 }
-            else:
-                # Fallback: Use traditional amenity matcher
-                return self.match(
-                    lifestyle=lifestyle or "Custom",
-                    location=""
-                )
-                
-        except ImportError as e:
-            logger.warning(f"CrossModalMatcher not available: {e}. Falling back to amenity matching.")
-            return self.match(
-                lifestyle=lifestyle or "Custom",
+
+            fallback_result = self.match(
+                lifestyle=lifestyle or query or "Custom",
                 location=""
             )
+            fallback_result["search_type"] = "fallback_amenity"
+            fallback_result["original_query"] = query
+            fallback_result["optimized_query"] = optimized_query
+            fallback_result["lifestyle_profile"] = lifestyle_matched or fallback_result.get("lifestyle_profile")
+            return fallback_result
+                
+        except ImportError as e:
+            self._cross_modal_available = False
+            logger.warning(f"CrossModalMatcher not available: {e}. Falling back to amenity matching.")
+            fallback_result = self.match(
+                lifestyle=lifestyle or query or "Custom",
+                location=""
+            )
+            fallback_result["search_type"] = "fallback_amenity"
+            fallback_result["original_query"] = query
+            fallback_result["optimized_query"] = query
+            return fallback_result
         except Exception as e:
+            self._cross_modal_available = False
             logger.error(f"Error in cross-modal recommendations: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "fallback": self.match(
-                    lifestyle=lifestyle or "Custom",
-                    location=""
-                )
-            }
+            fallback_result = self.match(
+                lifestyle=lifestyle or query or "Custom",
+                location=""
+            )
+            fallback_result["search_type"] = "fallback_amenity"
+            fallback_result["original_query"] = query
+            fallback_result["optimized_query"] = query
+            fallback_result["fallback_reason"] = str(e)
+            return fallback_result
 
     def optimize_search_query(self, lifestyle: str) -> str:
         """
